@@ -104,10 +104,9 @@ pub struct Activity {
     pub elapsed: f64,
     pub last_input: f64,
     pub pressed: bool,
-    pub rate: f64,
     pub idle: f64,
     pub fps: f64,
-    pub previous_fps: f64,
+    pub minimum: f64,
     pub maximum: Option<f64>,
     pub size: CatSize,
     pub spin_chance: f64,
@@ -119,6 +118,10 @@ pub struct Pet {
     started: f64,
     wake_since: Option<f64>,
     rest_cycle: usize,
+    rest_input: f64,
+    sleep_limit: f64,
+    fps: f64,
+    pub travel: f64,
     frame: u32,
     phase: f64,
     random: u64,
@@ -134,6 +137,10 @@ impl Pet {
             started: now,
             wake_since: None,
             rest_cycle: 0,
+            rest_input: f64::NEG_INFINITY,
+            sleep_limit: f64::INFINITY,
+            fps: 3.0,
+            travel: 0.0,
             frame: 0,
             phase: 0.0,
             random: SystemTime::now()
@@ -150,26 +157,64 @@ impl Pet {
             elapsed,
             last_input,
             pressed,
-            rate,
             idle,
             fps,
-            previous_fps,
+            minimum,
             maximum,
             size,
             spin_chance,
         } = activity;
+        self.travel = 0.0;
         let age = now - last_input;
-        let pause = 0.35_f64.min(idle * 0.2);
-        let lying = 0.8_f64.min(idle * 0.4);
+        let pause = 2.0_f64.min(idle * 0.65);
+        let spin_pause = 0.35_f64.min(idle * 0.2);
+        let lying = 0.6_f64.min(idle * 0.3);
+        if pressed {
+            self.sleep_limit = f64::INFINITY;
+        }
+        // Select once per pause, before computing this gesture's deadline.
+        if age >= pause && last_input.is_finite() && self.rest_input != last_input {
+            self.rest_cycle = self.rest_cycle.wrapping_add(1);
+            self.rest_input = last_input;
+        }
+        let gesture = REST_ACTIONS[self.rest_cycle.wrapping_sub(1) % REST_ACTIONS.len()];
+        let duration = match gesture {
+            "lick-paw" | "lick-body" | "itch" => 3.0,
+            "meow" => 1.0,
+            _ => 0.5,
+        };
+        let idle = idle.min(pause + duration + lying).min(self.sleep_limit);
+        if age >= idle {
+            self.sleep_limit = idle;
+        }
         let waking = 0.65_f64.min(idle * 0.4);
+        // Ease to minimum cadence early enough to show a slow walk. The
+        // same cadence advances both feet and travel, including on resume.
+        let remaining = (1.0 - age / (pause * 0.7)).clamp(0.0, 1.0);
+        let easing = remaining * remaining * (3.0 - 2.0 * remaining);
+        let previous_fps = self.fps;
+        let target = minimum + (fps - minimum) * easing * easing;
+        self.fps = if target > previous_fps {
+            previous_fps + (target - previous_fps) * (1.0 - 0.15_f64.powf(elapsed / 0.3))
+        } else {
+            target
+        };
+        if let Some(cap) = maximum {
+            self.fps = self.fps.min(cap);
+        }
+        let fps = self.fps;
         if pressed && matches!(self.action, "sleep" | "deep-sleep") {
             self.wake_since = Some(now);
         }
 
-        let spinning = self.spin_since.is_some() && spin_chance > 0.0 && age < pause;
+        let spinning = self.spin_since.is_some() && spin_chance > 0.0 && age < spin_pause;
         if !spinning {
             self.spin_since = None;
         }
+        let run_at = (minimum + 9.0)
+            .min(maximum.unwrap_or(f64::INFINITY) * 0.85)
+            .max(minimum);
+        let walk_at = (minimum + 6.0).min(run_at - 0.5).max(minimum);
         let (mut action, mut started) = if age >= idle {
             self.spin_since = None;
             if last_input.is_finite() && age >= idle + 30.0 {
@@ -191,14 +236,8 @@ impl Pet {
         } else if age >= idle - lying {
             ("lie-down", last_input + idle - lying)
         } else if age >= pause {
-            if !REST_ACTIONS.contains(&self.action) {
-                self.rest_cycle = self.rest_cycle.wrapping_add(1);
-            }
-            (
-                REST_ACTIONS[self.rest_cycle.wrapping_sub(1) % REST_ACTIONS.len()],
-                last_input + pause,
-            )
-        } else if rate >= 8.0 || (matches!(self.action, "run" | "spin") && rate >= 6.0) {
+            (gesture, last_input + pause)
+        } else if fps >= run_at || (matches!(self.action, "run" | "spin") && fps >= walk_at) {
             ("run", now)
         } else {
             ("walk", now)
@@ -206,7 +245,7 @@ impl Pet {
 
         if now >= self.next_spin_check {
             self.next_spin_check = now + 1.0;
-            if action == "run" && spin_chance > 0.0 {
+            if action == "run" && spin_chance > 0.0 && age < spin_pause {
                 self.random ^= self.random << 13;
                 self.random ^= self.random >> 7;
                 self.random ^= self.random << 17;
@@ -219,12 +258,16 @@ impl Pet {
             }
         }
 
+        let changing_gait =
+            matches!(action, "walk" | "run") && matches!(self.action, "walk" | "run");
         let changed = action != self.action;
         if changed {
             self.action = action;
             self.started = started;
-            self.frame = 0;
-            self.phase = 0.0;
+            if !changing_gait {
+                self.frame = 0;
+                self.phase = 0.0;
+            }
         }
         let clip = clip(action);
         let time = (now - self.started).max(0.0);
@@ -238,8 +281,14 @@ impl Pet {
             let previous_speed = maximum.map_or(previous_fps + spin_base, |cap| {
                 (previous_fps + spin_base).min(cap)
             });
-            if !changed {
-                let frames = self.phase + elapsed * (previous_speed + speed) * 0.5;
+            if !changed || changing_gait {
+                let advance = elapsed * (previous_speed + speed) * 0.5;
+                if action != "spin" {
+                    let widths = if action == "run" { 1.5 } else { 1.0 };
+                    self.travel =
+                        advance / clip.frames as f64 * size_layout(size).0 as f64 * widths;
+                }
+                let frames = self.phase + advance;
                 self.frame = (self.frame + (frames % clip.frames as f64) as u32) % clip.frames;
                 self.phase = frames.fract();
             }
@@ -272,6 +321,132 @@ impl Pet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn activity(now: f64, last_input: f64, fps: f64) -> Activity {
+        Activity {
+            now,
+            elapsed: 0.05,
+            last_input,
+            pressed: now == last_input,
+            idle: 8.0,
+            fps,
+            minimum: 3.0,
+            maximum: None,
+            size: CatSize::XLarge,
+            spin_chance: 0.0,
+        }
+    }
+
+    #[test]
+    fn each_gesture_finishes_at_its_own_deadline() {
+        for (index, duration) in [3.0, 0.5, 3.0, 3.0, 1.0, 0.5].into_iter().enumerate() {
+            let mut pet = Pet {
+                action: "walk",
+                rest_cycle: index,
+                ..Pet::new(0.0)
+            };
+            pet.update(activity(2.01, 0.0, 3.0));
+            assert_eq!(pet.action, REST_ACTIONS[index]);
+            pet.update(activity(2.0 + duration - 0.01, 0.0, 3.0));
+            assert_eq!(pet.action, REST_ACTIONS[index]);
+            pet.update(activity(2.0 + duration + 0.01, 0.0, 3.0));
+            assert_eq!(pet.action, "lie-down");
+            pet.update(activity(2.6 + duration + 0.01, 0.0, 3.0));
+            assert_eq!(pet.action, "sleep");
+            let mut longer = activity(2.6 + duration + 0.02, 0.0, 3.0);
+            longer.idle = 3600.0;
+            pet.update(longer);
+            assert_eq!(pet.action, "sleep", "changing the timeout woke the cat");
+            pet.update(activity(32.6 + duration + 0.01, 0.0, 3.0));
+            assert_eq!(pet.action, "deep-sleep");
+            pet.update(activity(40.0, 40.0, 3.0));
+            assert_eq!(pet.action, "stretch");
+        }
+    }
+
+    #[test]
+    fn gait_changes_preserve_footfall_and_fractional_progress() {
+        let mut pet = Pet {
+            action: "walk",
+            frame: 5,
+            phase: 0.4,
+            fps: 11.0,
+            ..Pet::new(0.0)
+        };
+        for (now, fps, action) in [(0.01, 63.0, "run"), (0.02, 3.0, "walk")] {
+            let previous = pet.phase;
+            let mut input = activity(now, now, fps);
+            input.elapsed = 0.01;
+            pet.update(input);
+            assert_eq!(pet.action, action);
+            assert_eq!(pet.frame, 5);
+            assert!(pet.phase > previous);
+            assert!(pet.deadline > now);
+        }
+    }
+
+    #[test]
+    fn travel_and_legs_use_the_same_cadence_and_stride() {
+        for (action, fps, widths) in [("walk", 6.0, 1.0), ("run", 16.0, 1.5)] {
+            let mut pet = Pet {
+                action,
+                fps,
+                frame: 2,
+                ..Pet::new(0.0)
+            };
+            let mut input = activity(0.1, 0.1, fps);
+            input.elapsed = 0.1;
+            pet.update(input);
+            let frames = 0.1 * fps;
+            assert!((pet.travel - frames / 8.0 * 4.0 * widths).abs() < 1e-9);
+            assert_eq!(pet.frame, 2 + frames as u32);
+            assert!((pet.phase - frames.fract()).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn pauses_ease_into_a_visible_walk_and_resume_without_jumping() {
+        let mut pet = Pet {
+            action: "run",
+            fps: 63.0,
+            ..Pet::new(0.0)
+        };
+        let mut walking = 0;
+        let mut poses = std::collections::HashSet::new();
+        for step in 1..40 {
+            let previous = pet.fps;
+            let pose = pet.update(activity(step as f64 * 0.05, 0.0, 63.0));
+            assert!(pet.fps <= previous);
+            assert!(pet.travel > 0.0);
+            if pet.action == "walk" {
+                walking += 1;
+                poses.insert(pose);
+            }
+        }
+        assert!(walking >= 20);
+        assert!(poses.len() >= 4);
+        let mut resumed = activity(1.96, 1.96, 63.0);
+        resumed.elapsed = 0.01;
+        pet.update(resumed);
+        assert_eq!(pet.action, "walk");
+        assert!(pet.fps < 20.0);
+    }
+
+    #[test]
+    fn small_timeouts_compress_phases_and_rest_never_moves() {
+        let mut pet = Pet::new(0.0);
+        for step in 0..=101 {
+            let now = step as f64 * 0.001;
+            let mut input = activity(now, 0.0, 20.0);
+            input.elapsed = 0.001;
+            input.idle = 0.1;
+            pet.update(input);
+            if !matches!(pet.action, "walk" | "run") {
+                assert_eq!(pet.travel, 0.0);
+            }
+        }
+        assert_eq!(pet.action, "sleep");
+    }
 
     #[test]
     fn all_clips_share_the_font_manifest_and_keep_the_selected_width() {

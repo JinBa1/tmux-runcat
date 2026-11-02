@@ -54,6 +54,7 @@ pub fn run(plugin: &Path, explicit: Option<(&OsStr, &OsStr)>) -> io::Result<()> 
         ("@runcat-skin", "classic"),
         ("@runcat-spin-chance", "0"),
         ("@runcat-roam", "off"),
+        ("@runcat-color", "inherit"),
     ] {
         if !tmux.output(["show-options", "-gv", name])?.status.success() {
             tmux.execute(["set-option", "-g", name, value])?;

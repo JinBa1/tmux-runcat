@@ -1,4 +1,5 @@
 use crate::animation::{Animation, Settings};
+use crate::patrol::Patrol;
 use crate::tmux::Tmux;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -14,22 +15,47 @@ const FORMAT: &str = "#{client_name}\t#{session_id}\t#{@runcat-keys}\t#{@runcat-
 struct Session {
     count: u64,
     settings: Settings,
+    clients: Vec<Client>,
+    color: String,
+}
+
+struct Client {
+    pid: u32,
+    room: i32,
+}
+
+#[derive(Default)]
+struct View {
+    session: String,
+    patrol: Patrol,
+    published: Option<String>,
 }
 
 fn parse_clients(lines: impl Iterator<Item = String>) -> HashMap<String, Session> {
     let mut sessions: HashMap<String, Session> = HashMap::new();
     for line in lines {
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != 9 {
+        if fields.len() != 12 {
             continue;
         }
-        sessions
+        let Ok(pid) = fields[9].parse::<u32>() else {
+            continue;
+        };
+        let session = sessions
             .entry(fields[1].to_owned())
             .or_insert_with(|| Session {
                 count: fields[2].parse().unwrap_or(0),
                 settings: Settings::parse(fields[3], fields[4], fields[5], fields[6], fields[7])
                     .with_spin_chance(fields[8]),
+                clients: Vec::new(),
+                color: fields[11].to_owned(),
             });
+        if !session.clients.iter().any(|client| client.pid == pid) {
+            session.clients.push(Client {
+                pid,
+                room: fields[10].parse().unwrap_or(-1),
+            });
+        }
     }
     sessions
 }
@@ -73,8 +99,16 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
     let tmux = Tmux::new(socket);
     let start = Instant::now();
     let mut animations: HashMap<String, Animation> = HashMap::new();
-    let mut published: HashMap<String, (String, &'static str, u16, bool)> = HashMap::new();
-    let list_clients = format!("list-clients -F '{FORMAT}'");
+    let mut published: HashMap<String, (String, &'static str)> = HashMap::new();
+    let mut views: HashMap<u32, View> = HashMap::new();
+    let mut synced = None;
+    let list_clients = format!(
+        // L: builds a format tree owned by each attached client. This reuses
+        // its status-command cache; a normal list-clients tree belongs to the
+        // short-lived querying process and loses asynchronous job results.
+        "list-clients -F '#{{L:#{{?#{{==:#{{session_name}},#{{client_session}}}},{FORMAT}\t#{{client_pid}}\t{}\t#{{@runcat-color}}\n,}}}}'",
+        crate::track::room_format()
+    );
     loop {
         let output = tmux.output([
             // A fresh server may still be processing its startup config and
@@ -105,10 +139,41 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
         }
         let status_format = lines.next().unwrap_or("");
         let roaming = matches!(lines.next(), Some("on" | "1"));
-        crate::track::sync(&tmux, status_format, roaming)?;
         let sessions = parse_clients(lines.map(str::to_owned));
+        let clients = sessions
+            .values()
+            .flat_map(|session| session.clients.iter().map(|client| client.pid))
+            .collect();
+        let client_format = crate::track::client_format(clients);
+        let track_state = (status_format.to_owned(), roaming, client_format.clone());
+        if synced.as_ref() != Some(&track_state) {
+            crate::track::sync(&tmux, status_format, roaming, &client_format)?;
+            synced = Some(track_state);
+        }
         animations.retain(|session, _| sessions.contains_key(session));
         published.retain(|session, _| sessions.contains_key(session));
+        // Remove client options after detach/session switches rather than
+        // leaving stale lanes in a long-running server.
+        let mut stale = Vec::new();
+        views.retain(|pid, view| {
+            let attached = roaming
+                && sessions
+                    .get(&view.session)
+                    .is_some_and(|session| session.clients.iter().any(|client| client.pid == *pid));
+            if !attached {
+                stale.push((view.session.clone(), *pid));
+            }
+            attached
+        });
+        for (session, pid) in stale {
+            let _ = tmux.output([
+                "set-option",
+                "-qu",
+                "-t",
+                &session,
+                &format!("@runcat-client-{pid}"),
+            ]);
+        }
         if sessions.is_empty() {
             thread::sleep(Duration::from_millis(250));
             continue;
@@ -124,16 +189,8 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
                 .update(activity.count, now, activity.settings)
                 .to_owned();
             next_update = next_update.min(animation.next_update());
-            let (position, left, moving_pose) = if roaming {
-                animation.roam(now)
-            } else {
-                (0, false, pose.clone())
-            };
-            let snapshot = (pose.clone(), animation.state(), position, left);
+            let snapshot = (pose.clone(), animation.state());
             let previous = published.get(&session);
-            if previous == Some(&snapshot) {
-                continue;
-            }
             if previous.is_none_or(|last| last.0 != pose) {
                 publish_option(&mut update, &session, "@runcat-frame", pose);
             }
@@ -145,29 +202,37 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
                     animation.state().to_owned(),
                 );
             }
-            if previous.is_none_or(|last| last.2 != position) {
-                publish_option(
-                    &mut update,
-                    &session,
-                    "@runcat-position",
-                    position.to_string(),
-                );
-            }
-            if previous.is_none_or(|last| last.3 != left) {
-                publish_option(
-                    &mut update,
-                    &session,
-                    "@runcat-direction",
-                    if left { "left" } else { "right" }.to_owned(),
-                );
-            }
-            if previous.is_none_or(|last| last.0 != snapshot.0 || last.3 != left) {
-                publish_option(&mut update, &session, "@runcat-roam-frame", moving_pose);
+            if roaming {
+                for client in activity.clients {
+                    let view = views.entry(client.pid).or_insert_with(|| View {
+                        session: session.clone(),
+                        ..View::default()
+                    });
+                    let (position, left) = view.patrol.update(animation.travel(), client.room);
+                    let lane = crate::track::render(
+                        client.room,
+                        position,
+                        &animation.facing(left),
+                        &activity.color,
+                    );
+                    if view.published.as_ref() != Some(&lane) {
+                        publish_option(
+                            &mut update,
+                            &session,
+                            &format!("@runcat-client-{}", client.pid),
+                            lane.clone(),
+                        );
+                        view.published = Some(lane);
+                    }
+                }
             }
             published.insert(session, snapshot);
         }
         if !update.is_empty() && !tmux.output(update)?.status.success() {
             published.clear();
+            for view in views.values_mut() {
+                view.published = None;
+            }
         }
         // Poll input at least every 50 ms, waking earlier for fast frames.
         // Time spent querying/redrawing tmux counts toward the deadline.
@@ -185,15 +250,18 @@ mod tests {
     fn clients_are_grouped_by_session_with_independent_counts() {
         let sessions = parse_clients(
             [
-                "/dev/pts/1\t$1\t4\t2\t3\t12\tmedium\tclassic\t0",
-                "/dev/pts/2\t$1\t4\t2\t3\t12\tmedium\tclassic\t0",
-                "/dev/pts/3\t$2\t9\t1\t4\t8\tlarge\tpet-cats\t15",
+                "/dev/pts/1\t$1\t4\t2\t3\t12\tmedium\tclassic\t0\t101\t80\tinherit",
+                "/dev/pts/2\t$1\t4\t2\t3\t12\tmedium\tclassic\t0\t102\t40\tinherit",
+                "/dev/pts/3\t$2\t9\t1\t4\t8\tlarge\tpet-cats\t15\t103\t90\tcyan",
                 "invalid",
             ]
             .into_iter()
             .map(str::to_owned),
         );
         assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions["$1"].clients.len(), 2);
+        assert_eq!(sessions["$1"].clients[1].room, 40);
+        assert_eq!(sessions["$2"].color, "cyan");
         assert_eq!(sessions["$1"].count, 4);
         assert_eq!(sessions["$2"].count, 9);
         assert_eq!(sessions["$2"].settings.idle, 1.0);

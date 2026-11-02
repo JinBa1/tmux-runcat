@@ -2,7 +2,7 @@
 
 A small cat for your tmux status bar. It wakes when you type, runs faster as
 your typing speeds up without a speed cap, slows down, and curls up to sleep
-after two idle seconds.
+within two idle seconds by default.
 Each session has independent activity. Choose the classic silhouette or the
 expressive Pet Cats skin, which stretches, walks, runs, grooms, meows, and
 lies down before sleeping. When sleeping, the cat breathes gently
@@ -75,13 +75,14 @@ can also be changed with `set-option` while the animation is running.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `@runcat-idle` | `2` | Idle seconds before sleeping (0.1–3600) |
+| `@runcat-idle` | `2` | Maximum idle seconds before sleeping (0.1–3600); Pet Cats may finish short gestures earlier |
 | `@runcat-min-fps` | `3` | Minimum running speed (1–20 FPS) |
 | `@runcat-max-fps` | `0` | `0` or `unlimited` removes the cap; a positive FPS value sets an optional limit |
 | `@runcat-size` | `medium` | `small` (1 cell), `medium` (2 cells), `large` (3 cells), or `xlarge` (4 cells) |
 | `@runcat-skin` | `classic` | `classic` or `pet-cats` |
 | `@runcat-spin-chance` | `0` | Pet Cats: percent chance per second of running to start an OIIA-style spin (0–100) |
 | `@runcat-roam` | `off` | `on` lets the cat pace through the free space between the window list and right status |
+| `@runcat-color` | `inherit` | Roaming foreground: ANSI colour name (including bright variants), `colour0`–`colour255`, `#RRGGBB`, `default` (terminal default), or `inherit` (status foreground) |
 
 ```tmux
 set -g @runcat-idle 3
@@ -92,8 +93,8 @@ set -g @runcat-skin pet-cats
 ```
 
 The Pet Cats skin uses the first cat from [Pet Cats Pack by LuizMelo](https://luizmelo.itch.io/pet-cat-pack),
-bundled under CC0. Install the v7 fonts before selecting it. Both skins inherit
-the status foreground color, including on terminals with color-font support.
+bundled under CC0. Install the v7 fonts before selecting it. Both skins use foreground-colored glyphs, including on terminals with color-font support.
+Roaming inherits the status foreground unless `@runcat-color` is set.
 For example, `#[fg=cyan]#{@runcat-frame}` draws a cyan cat; eye details remain
 cutouts. Both skins work with custom base fonts and all four sizes. Skin changes
 apply live.
@@ -102,15 +103,19 @@ apply live.
 | --- | --- |
 | First key after sleep | A short stretch, with continued typing still counted |
 | Gentle typing | Walk |
-| 8+ keys in the last second | Run, with uncapped speed following typing rate |
+| Sustained faster typing | Ease into running, with uncapped speed following typing rate |
 | Brief pause | Rotate between grooming, idle, scratching, meowing, and sitting |
 | Approaching the idle timeout | Lie down |
 | Idle timeout | Sleep with subtle breathing |
 | Another 30 seconds of rest | Alternate sleeping pose |
 
-The sleep timeout is still `@runcat-idle` (2 seconds by default). Wake and
-bedtime transitions shorten for smaller timeout values. New input interrupts
-pause gestures and lying down immediately. There is no Zzz text or audio.
+`@runcat-idle` is a maximum (2 seconds by default). After input pauses, the
+cat slows into a visible walk for up to 2 seconds, then performs one gesture:
+idle/sitting takes 0.5 seconds, meowing 1 second, and grooming/scratching
+3 seconds. It then lies down for 0.6 seconds and sleeps. Short gestures finish
+earlier rather than holding a static pose until the maximum timeout. Movement
+and bedtime phases compress for shorter timeouts. New input interrupts gestures
+and lying down immediately. A sleeping cat stays asleep when the timeout changes.
 Reactions use activity counts; no special Enter or Backspace bindings are added.
 The current action is exposed as `#{@runcat-state}` for optional status formats
 and troubleshooting.
@@ -123,6 +128,7 @@ Install the v7 font, then enable both features:
 set -g @runcat-skin pet-cats
 set -g @runcat-spin-chance 18
 set -g @runcat-roam on
+set -g @runcat-color cyan
 ```
 
 While running, the cat gets one chance per second to start an OIIA-inspired
@@ -138,10 +144,22 @@ The cat moves while walking or running, faces its direction of travel, and
 turns around at either edge. It rests where it stopped. The available path is
 measured for each client from its terminal width and rendered left status,
 window list, and right status, so resizing and changing window names resize
-the path. The cat hides when there is no room. Theme reloads preserve roaming.
+the path. Positions retain fractional terminal cells; wider terminals do not
+increase speed. A full walking cycle covers one cat width, and a running cycle
+covers 1.5 widths. Walk/run transitions preserve footfall and fractional frame
+progress; the same smoothed cadence drives animation and travel. Resizing clamps
+the current position to the new path. Spinning and resting do not advance it.
+The cat hides when there is no room. Theme reloads preserve roaming.
 Remove `#{@runcat-frame}` from any stationary status segment when enabling
 roaming, so the cat is drawn once. Custom layouts without the standard
 right-aligned status block keep their existing layout.
+
+`@runcat-color` changes live and applies to all roaming poses in either direction,
+including spins and sleep. Invalid values fall back to inherited status foreground.
+Only the cat is styled; neighbouring status content keeps its own colours.
+Frame variables remain raw glyphs. For a stationary cat with a configured literal
+colour, use `#[fg=#{@runcat-color}]#{@runcat-frame}#[default]` in your status format;
+with `inherit`, omit that foreground wrapper to use the surrounding style.
 
 For terminals that support synchronized updates, add the tmux `sync` terminal
 feature before attaching a client. This presents fast status redraws together

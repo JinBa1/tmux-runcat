@@ -1,33 +1,26 @@
+/// A client's position in terminal cells. Retain fractional travel between
+/// redraws; neither terminal width nor polling frequency changes stride length.
+#[derive(Default)]
 pub struct Patrol {
-    phase: f64,
-    updated: f64,
+    position: f64,
+    left: bool,
 }
 
 impl Patrol {
-    pub fn new(now: f64) -> Self {
-        Self {
-            phase: 0.0,
-            updated: now,
-        }
-    }
-
-    pub fn update(&mut self, now: f64, state: &str, fps: f64) -> (u16, bool) {
-        let elapsed = (now - self.updated).max(0.0);
-        self.updated = now;
-        if matches!(state, "walk" | "run") {
-            let next = self.phase + elapsed * (fps * 0.0125).clamp(0.08, 0.3);
-            // Publish the endpoint itself for one frame before returning.
-            self.phase = if self.phase < 1.0 && next >= 1.0 {
-                1.0
-            } else if next >= 2.0 {
-                0.0
+    pub fn update(&mut self, distance: f64, room: i32) -> (usize, bool) {
+        let room = room.max(0) as f64;
+        self.position = self.position.clamp(0.0, room);
+        if room > 0.0 && distance.is_finite() && distance > 0.0 {
+            let phase = if self.left {
+                2.0 * room - self.position
             } else {
-                next
+                self.position
             };
+            let phase = (phase + distance).rem_euclid(2.0 * room);
+            self.left = phase >= room;
+            self.position = if self.left { 2.0 * room - phase } else { phase };
         }
-        let left = self.phase >= 1.0;
-        let position = if left { 2.0 - self.phase } else { self.phase };
-        ((position * 1000.0).round() as u16, left)
+        (self.position.round() as usize, self.left)
     }
 }
 
@@ -36,20 +29,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bounces_and_stops_for_spinning_and_rest() {
-        let mut patrol = Patrol::new(0.0);
-        assert_eq!(patrol.update(4.0, "run", 20.0), (1000, true));
-        assert_eq!(patrol.update(5.0, "run", 20.0), (750, true));
-        assert_eq!(patrol.update(6.0, "spin", 20.0), (750, true));
-        assert_eq!(patrol.update(7.0, "sleep", 20.0), (750, true));
-        assert_eq!(patrol.update(10.0, "run", 20.0), (0, false));
+    fn retains_fractional_travel_and_reflects_overshoot() {
+        let mut patrol = Patrol::default();
+        for _ in 0..4 {
+            patrol.update(0.1, 10);
+        }
+        assert_eq!(patrol.update(0.2, 10), (1, false));
+        assert_eq!(patrol.update(10.0, 10), (9, true));
+        assert_eq!(patrol.update(9.4, 10), (0, false));
+        assert_eq!(patrol.update(1003.0, 10), (3, false));
     }
 
     #[test]
-    fn long_delays_and_clock_reversal_stay_in_bounds() {
-        let mut patrol = Patrol::new(0.0);
-        for now in [100.0, 99.0, 500.0, 500.01] {
-            assert!(patrol.update(now, "run", 300.0).0 <= 1000);
-        }
+    fn width_does_not_change_speed_and_resizing_clamps_position() {
+        let (mut narrow, mut wide) = (Patrol::default(), Patrol::default());
+        assert_eq!(narrow.update(7.0, 10), wide.update(7.0, 100));
+        assert_eq!(wide.update(0.0, 4), (4, false));
+        assert_eq!(wide.update(1.0, 4), (3, true));
+        assert_eq!(wide.update(0.0, 100), (3, true));
+        assert_eq!(wide.update(0.0, -10), (0, true));
     }
 }
