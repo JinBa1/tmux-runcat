@@ -4,9 +4,12 @@ from pathlib import Path
 import zipfile
 
 import png
+import spinning_cat
 
 BASE = 0xF700
 XLARGE_BASE = 0xE400
+SPIN_BASE = 0x100000
+MIRROR_BASE = 0x101000
 MANIFEST = Path(__file__).with_name("pet-cats") / "animations.tsv"
 
 
@@ -36,6 +39,11 @@ def poses():
     with zipfile.ZipFile(Path(__file__).with_name("vendor") / "Pet-Cats-Pack.zip") as archive:
         for name, filename, count, mode in animations():
             count = int(count)
+            if mode == "spin":
+                for frame in range(count):
+                    mono = rectangles(spinning_cat.pixels(frame, count), lambda pixel: pixel[3])
+                    frames.append({"mono": mono, "action": name})
+                continue
             path = f"Pet Cats Pack/Cat-1/Cat-1-{filename}.png"
             width, height, rows, _ = png.Reader(bytes=archive.read(path)).asRGBA8()
             rows = [[tuple(row[x:x+4]) for x in range(0, len(row), 4)] for row in rows]
@@ -60,9 +68,21 @@ def poses():
     points = [point for frame in frames for contour in frame["mono"] for point in contour]
     bounds = (min(x for x, _ in points), max(x for x, _ in points),
               min(y for _, y in points), max(y for _, y in points))
+    original = next(index for index, frame in enumerate(frames) if frame["action"] == "spin")
     layout = [(BASE + index*6 + offset + half, cells, half, index)
-              for index in range(len(frames))
+              for index in range(original)
               for cells, offset in ((1, 0), (2, 1), (3, 3)) for half in range(cells)]
     layout += [(XLARGE_BASE + index*4 + half, 4, half, index)
-               for index in range(len(frames)) for half in range(4)]
+               for index in range(original) for half in range(4)]
+    sizes = ((1, 0), (2, 1), (3, 3), (4, 6))
+    layout += [(SPIN_BASE + (index-original)*10 + offset + half, cells, half, index)
+               for index in range(original, len(frames))
+               for cells, offset in sizes for half in range(cells)]
+    normal_count = len(frames)
+    frames += [{"mono": [[(50-x, y) for x, y in reversed(contour)]
+                          for contour in frame["mono"]], "action": frame["action"]}
+               for frame in frames[:]]
+    layout += [(MIRROR_BASE + index*10 + offset + half, cells, half, normal_count+index)
+               for index in range(normal_count)
+               for cells, offset in sizes for half in range(cells)]
     return frames, layout, bounds

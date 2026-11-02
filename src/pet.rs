@@ -1,8 +1,11 @@
 use crate::animation::CatSize;
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const BASE: u32 = 0xf700;
 const XLARGE_BASE: u32 = 0xe400;
+const SPIN_BASE: u32 = 0x100000;
+const MIRROR_BASE: u32 = 0x101000;
 const REST_ACTIONS: [&str; 6] = ["lick-paw", "idle", "itch", "lick-body", "meow", "sit"];
 
 #[derive(Clone, Copy)]
@@ -41,6 +44,14 @@ fn clip(name: &str) -> Clip {
 pub fn pose(size: CatSize, action: &str, frame: u32) -> String {
     let clip = clip(action);
     let frame = clip.first + frame % clip.frames;
+    if action == "spin" {
+        let (cells, offset) = size_layout(size);
+        return (0..cells)
+            .map(|half| {
+                char::from_u32(SPIN_BASE + (frame - clip.first) * 10 + offset + half).unwrap()
+            })
+            .collect();
+    }
     if size == CatSize::XLarge {
         return (0..4)
             .map(|half| char::from_u32(XLARGE_BASE + 4 * frame + half).unwrap())
@@ -58,6 +69,36 @@ pub fn pose(size: CatSize, action: &str, frame: u32) -> String {
         .collect()
 }
 
+fn size_layout(size: CatSize) -> (u32, u32) {
+    match size {
+        CatSize::Small => (1, 0),
+        CatSize::Medium => (2, 1),
+        CatSize::Large => (3, 3),
+        CatSize::XLarge => (4, 6),
+    }
+}
+
+pub fn mirror(pose: &str) -> String {
+    pose.chars()
+        .map(|character| {
+            let code = character as u32;
+            let (frame, offset) = if (BASE..BASE + clip("spin").first * 6).contains(&code) {
+                ((code - BASE) / 6, (code - BASE) % 6)
+            } else if (XLARGE_BASE..XLARGE_BASE + clip("spin").first * 4).contains(&code) {
+                ((code - XLARGE_BASE) / 4, 6 + (code - XLARGE_BASE) % 4)
+            } else if (SPIN_BASE..SPIN_BASE + clip("spin").frames * 10).contains(&code) {
+                (
+                    clip("spin").first + (code - SPIN_BASE) / 10,
+                    (code - SPIN_BASE) % 10,
+                )
+            } else {
+                return character;
+            };
+            char::from_u32(MIRROR_BASE + frame * 10 + offset).unwrap()
+        })
+        .collect()
+}
+
 pub struct Activity {
     pub now: f64,
     pub elapsed: f64,
@@ -67,7 +108,9 @@ pub struct Activity {
     pub idle: f64,
     pub fps: f64,
     pub previous_fps: f64,
+    pub maximum: Option<f64>,
     pub size: CatSize,
+    pub spin_chance: f64,
 }
 
 pub struct Pet {
@@ -78,6 +121,9 @@ pub struct Pet {
     rest_cycle: usize,
     frame: u32,
     phase: f64,
+    random: u64,
+    next_spin_check: f64,
+    spin_since: Option<f64>,
 }
 
 impl Pet {
@@ -90,6 +136,11 @@ impl Pet {
             rest_cycle: 0,
             frame: 0,
             phase: 0.0,
+            random: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(1, |time| time.as_nanos() as u64 | 1),
+            next_spin_check: now + 1.0,
+            spin_since: None,
         }
     }
 
@@ -103,7 +154,9 @@ impl Pet {
             idle,
             fps,
             previous_fps,
+            maximum,
             size,
+            spin_chance,
         } = activity;
         let age = now - last_input;
         let pause = 0.35_f64.min(idle * 0.2);
@@ -113,7 +166,12 @@ impl Pet {
             self.wake_since = Some(now);
         }
 
-        let (action, started) = if age >= idle {
+        let spinning = self.spin_since.is_some() && spin_chance > 0.0 && age < pause;
+        if !spinning {
+            self.spin_since = None;
+        }
+        let (mut action, mut started) = if age >= idle {
+            self.spin_since = None;
             if last_input.is_finite() && age >= idle + 30.0 {
                 ("deep-sleep", last_input + idle + 30.0)
             } else {
@@ -128,6 +186,8 @@ impl Pet {
             }
         } else if let Some(wake) = self.wake_since.filter(|wake| now - wake < waking) {
             ("stretch", wake)
+        } else if spinning {
+            ("spin", self.spin_since.unwrap())
         } else if age >= idle - lying {
             ("lie-down", last_input + idle - lying)
         } else if age >= pause {
@@ -138,11 +198,26 @@ impl Pet {
                 REST_ACTIONS[self.rest_cycle.wrapping_sub(1) % REST_ACTIONS.len()],
                 last_input + pause,
             )
-        } else if rate >= 8.0 || (self.action == "run" && rate >= 6.0) {
+        } else if rate >= 8.0 || (matches!(self.action, "run" | "spin") && rate >= 6.0) {
             ("run", now)
         } else {
             ("walk", now)
         };
+
+        if now >= self.next_spin_check {
+            self.next_spin_check = now + 1.0;
+            if action == "run" && spin_chance > 0.0 {
+                self.random ^= self.random << 13;
+                self.random ^= self.random >> 7;
+                self.random ^= self.random << 17;
+                if ((self.random % 10_000) as f64) < spin_chance * 100.0 {
+                    self.spin_since = Some(now);
+                    self.next_spin_check = now + 8.0;
+                    action = "spin";
+                    started = now;
+                }
+            }
+        }
 
         let changed = action != self.action;
         if changed {
@@ -153,13 +228,22 @@ impl Pet {
         }
         let clip = clip(action);
         let time = (now - self.started).max(0.0);
-        if matches!(action, "walk" | "run") {
+        if matches!(action, "walk" | "run" | "spin") {
+            let spin_base = if action == "spin" {
+                clip.frames as f64
+            } else {
+                0.0
+            };
+            let speed = maximum.map_or(fps + spin_base, |cap| (fps + spin_base).min(cap));
+            let previous_speed = maximum.map_or(previous_fps + spin_base, |cap| {
+                (previous_fps + spin_base).min(cap)
+            });
             if !changed {
-                let frames = self.phase + elapsed * (previous_fps + fps) * 0.5;
+                let frames = self.phase + elapsed * (previous_speed + speed) * 0.5;
                 self.frame = (self.frame + (frames % clip.frames as f64) as u32) % clip.frames;
                 self.phase = frames.fract();
             }
-            self.deadline = now + (1.0 - self.phase) / fps;
+            self.deadline = now + (1.0 - self.phase) / speed;
         } else if matches!(action, "sleep" | "deep-sleep") {
             let step = (time / 0.75).floor();
             self.frame = [0, 1, 2, 1][step as usize % 4];
@@ -204,6 +288,7 @@ mod tests {
             "lick-paw",
             "lick-body",
             "stretch",
+            "spin",
         ] {
             let clip = clip(name);
             for frame in 0..clip.frames {
@@ -215,12 +300,21 @@ mod tests {
                 ] {
                     let text = pose(size, name, frame);
                     assert_eq!(text.chars().count(), width);
-                    let range = if size == CatSize::XLarge {
+                    let range = if name == "spin" {
+                        0x100000..0x1000a0
+                    } else if size == CatSize::XLarge {
                         0xe400..0xe518
                     } else {
                         0xf700..0xf8a4
                     };
                     assert!(text.chars().all(|value| range.contains(&(value as u32))));
+                    let mirrored = mirror(&text);
+                    assert_eq!(mirrored.chars().count(), width);
+                    assert!(
+                        mirrored
+                            .chars()
+                            .all(|value| (0x101000..0x10135c).contains(&(value as u32)))
+                    );
                 }
             }
         }

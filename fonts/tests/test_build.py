@@ -73,7 +73,7 @@ class FontBuildTests(unittest.TestCase):
 
     def test_sleep_pose_is_bundled_and_fits_two_cells(self):
         font = TTFont(self.data / "generated/RunCat-Regular.ttf")
-        self.assertEqual(font["name"].getDebugName(1), "JetBrainsMono RunCat v5")
+        self.assertEqual(font["name"].getDebugName(1), "JetBrainsMono RunCat v7")
         for code in range(0xEFFA, 0xF000):
             name = font.getBestCmap()[code]
             glyph = font["glyf"][name]
@@ -134,8 +134,8 @@ class FontBuildTests(unittest.TestCase):
 
     def test_pet_cats_inherit_foreground_and_fit_all_sizes(self):
         frames, layout, _ = pet_cats.poses()
-        self.assertEqual(len(frames), 70)
-        self.assertEqual(len(layout), 700)
+        self.assertEqual(len(frames), 172)
+        self.assertEqual(len(layout), 1720)
         for style in ("Regular", "Bold", "Italic", "BoldItalic"):
             font = TTFont(self.data / f"generated/RunCat-{style}.ttf")
             self.assertNotIn("COLR", font)
@@ -155,6 +155,25 @@ class FontBuildTests(unittest.TestCase):
                 glyphs = [glyph for glyph in glyphs if glyph.numberOfContours]
                 return max(glyph.yMax for glyph in glyphs) - min(glyph.yMin for glyph in glyphs)
             self.assertGreater(run_height(4), run_height(3) * 1.3)
+
+    def test_spinning_and_mirrored_glyphs_preserve_width_and_face_the_other_way(self):
+        frames, layout, _ = pet_cats.poses()
+        font = TTFont(self.data / "generated/RunCat-Regular.ttf")
+        self.assertEqual(sum(frame["action"] == "spin" for frame in frames), 32)
+        for frame in range(86):
+            bounds = []
+            for index in (frame, 86+frame):
+                glyphs = [(half, font["glyf"][font.getBestCmap()[code]])
+                          for code, cells, half, pose in layout if cells == 3 and pose == index]
+                glyphs = [(half, glyph) for half, glyph in glyphs if glyph.numberOfContours]
+                self.assertTrue(glyphs)
+                bounds.append((min(half*600+g.xMin for half,g in glyphs),
+                               max(half*600+g.xMax for half,g in glyphs),
+                               min(g.yMin for _,g in glyphs), max(g.yMax for _,g in glyphs)))
+            original, mirrored = bounds
+            self.assertAlmostEqual(original[0], 1800-mirrored[1], delta=1)
+            self.assertAlmostEqual(original[1], 1800-mirrored[0], delta=1)
+            self.assertEqual(original[2:], mirrored[2:])
 
     def test_pet_sleep_breathes_without_a_text_indicator_or_baseline_shift(self):
         font = TTFont(self.data / "generated/RunCat-Regular.ttf")
@@ -250,7 +269,7 @@ class CustomFontBuildTests(unittest.TestCase):
                     return values
 
                 self.assertEqual(os2_properties(original), os2_properties(patched))
-                self.assertEqual(patched["OS/2"].usLastCharIndex, 0xF8A3)
+                self.assertEqual(patched["OS/2"].usLastCharIndex, 0xFFFF)
                 self.assertEqual(original["hhea"].ascent, patched["hhea"].ascent)
                 self.assertEqual(original["hhea"].descent, patched["hhea"].descent)
                 for code in [*range(0xE400, 0xE518), *range(0xEFF0, 0xF000), *range(0xF600, 0xF608), *range(0xF620, 0xF638), *range(0xF640, 0xF660), *range(0xF700, 0xF8A4)]:
@@ -288,7 +307,7 @@ class CustomFontBuildTests(unittest.TestCase):
     def test_single_face_derives_family_and_supports_unicode_override(self):
         output = self.root / "single face"
         self.build(output, "--base-font", self.sources / "Regular.ttf")
-        self.assertEqual((output / "font-family.txt").read_text(), "Test Mono RunCat v5\n")
+        self.assertEqual((output / "font-family.txt").read_text(), "Test Mono RunCat v7\n")
         self.build(output, "--base-font", self.sources / "Regular.ttf", "--family", "猫 Mono RunCat")
         font = TTFont(output / "RunCat-Regular.ttf")
         self.assertEqual(font["name"].getDebugName(1), "猫 Mono RunCat")
