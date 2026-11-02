@@ -186,6 +186,7 @@ impl Animation {
                 idle: settings.idle,
                 fps: self.fps,
                 previous_fps,
+                maximum: settings.maximum,
                 size: settings.size,
                 spin_chance: settings.spin_chance,
             });
@@ -601,6 +602,38 @@ mod tests {
             first, second,
             "spin frames did not advance at high typing speed"
         );
+    }
+
+    #[test]
+    fn spin_obeys_fps_cap_and_removing_it_live() {
+        let capped = Settings {
+            skin: Skin::PetCats,
+            spin_chance: 100.0,
+            maximum: Some(12.0),
+            ..Settings::default()
+        };
+        let mut cat = Animation::new(0, 0.0);
+        cat.update(1, 0.1, capped);
+        cat.update(20, 0.8, capped);
+        cat.update(40, 1.1, capped);
+        assert_eq!(cat.state(), "spin");
+        assert!((cat.next_update() - 1.1 - 1.0 / 12.0).abs() < 0.000_001);
+
+        let uncapped = Settings {
+            maximum: None,
+            ..capped
+        };
+        cat.update(60, 1.12, uncapped);
+        assert_eq!(cat.state(), "spin");
+        assert!(cat.next_update() - 1.12 < 1.0 / 12.0);
+
+        let mut newly_capped = Animation::new(0, 0.0);
+        newly_capped.update(1, 0.1, uncapped);
+        newly_capped.update(200, 0.8, uncapped);
+        let first_spin_frame = newly_capped.update(400, 1.1, uncapped).to_owned();
+        assert_eq!(newly_capped.state(), "spin");
+        assert!(newly_capped.fps > 40.0);
+        assert_eq!(newly_capped.update(401, 1.12, capped), first_spin_frame);
     }
 
     #[test]

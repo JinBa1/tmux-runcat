@@ -126,7 +126,8 @@ set -g @runcat-roam on
 ```
 
 While running, the cat gets one chance per second to start an OIIA-inspired
-spin in place. Its rotation speeds up and slows down with typing. It keeps
+spin in place. Its rotation speeds up and slows down with typing, up to
+`@runcat-max-fps` when that cap is set. It keeps
 rotating as long as you type, then resumes its usual
 rest behavior when typing pauses. Spins have an eight-second cooldown between
 starts and never delay the idle timeout. Set the chance to `0` to disable

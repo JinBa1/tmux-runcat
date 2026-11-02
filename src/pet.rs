@@ -108,6 +108,7 @@ pub struct Activity {
     pub idle: f64,
     pub fps: f64,
     pub previous_fps: f64,
+    pub maximum: Option<f64>,
     pub size: CatSize,
     pub spin_chance: f64,
 }
@@ -153,6 +154,7 @@ impl Pet {
             idle,
             fps,
             previous_fps,
+            maximum,
             size,
             spin_chance,
         } = activity;
@@ -232,8 +234,10 @@ impl Pet {
             } else {
                 0.0
             };
-            let speed = fps + spin_base;
-            let previous_speed = previous_fps + spin_base;
+            let speed = maximum.map_or(fps + spin_base, |cap| (fps + spin_base).min(cap));
+            let previous_speed = maximum.map_or(previous_fps + spin_base, |cap| {
+                (previous_fps + spin_base).min(cap)
+            });
             if !changed {
                 let frames = self.phase + elapsed * (previous_speed + speed) * 0.5;
                 self.frame = (self.frame + (frames % clip.frames as f64) as u32) % clip.frames;
