@@ -1,7 +1,9 @@
 mod animation;
 mod load;
+mod patrol;
 mod pet;
 mod tmux;
+mod track;
 mod watch;
 
 use std::env;

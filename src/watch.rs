@@ -9,11 +9,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(50);
-const FORMAT: &str = "#{client_name}\t#{session_id}\t#{@runcat-keys}\t#{@runcat-idle}\t#{@runcat-min-fps}\t#{@runcat-max-fps}\t#{@runcat-size}\t#{@runcat-skin}";
+const FORMAT: &str = "#{client_name}\t#{session_id}\t#{@runcat-keys}\t#{@runcat-idle}\t#{@runcat-min-fps}\t#{@runcat-max-fps}\t#{@runcat-size}\t#{@runcat-skin}\t#{@runcat-spin-chance}";
 
 struct Session {
     count: u64,
-    clients: Vec<String>,
     settings: Settings,
 }
 
@@ -21,20 +20,31 @@ fn parse_clients(lines: impl Iterator<Item = String>) -> HashMap<String, Session
     let mut sessions: HashMap<String, Session> = HashMap::new();
     for line in lines {
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != 8 {
+        if fields.len() != 9 {
             continue;
         }
         sessions
             .entry(fields[1].to_owned())
             .or_insert_with(|| Session {
                 count: fields[2].parse().unwrap_or(0),
-                clients: Vec::new(),
-                settings: Settings::parse(fields[3], fields[4], fields[5], fields[6], fields[7]),
-            })
-            .clients
-            .push(fields[0].to_owned());
+                settings: Settings::parse(fields[3], fields[4], fields[5], fields[6], fields[7])
+                    .with_spin_chance(fields[8]),
+            });
     }
     sessions
+}
+
+fn publish_option(commands: &mut Vec<String>, session: &str, name: &str, value: String) {
+    if !commands.is_empty() {
+        commands.push(";".to_owned());
+    }
+    commands.extend([
+        "set-option".to_owned(),
+        "-t".to_owned(),
+        session.to_owned(),
+        name.to_owned(),
+        value,
+    ]);
 }
 
 pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
@@ -63,7 +73,7 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
     let tmux = Tmux::new(socket);
     let start = Instant::now();
     let mut animations: HashMap<String, Animation> = HashMap::new();
-    let mut published: HashMap<String, String> = HashMap::new();
+    let mut published: HashMap<String, (String, &'static str, u16, bool)> = HashMap::new();
     let list_clients = format!("list-clients -F '{FORMAT}'");
     loop {
         let output = tmux.output([
@@ -72,6 +82,14 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
             "show-options",
             "-gv",
             "@runcat-generation",
+            ";",
+            "show-options",
+            "-gqv",
+            "status-format[0]",
+            ";",
+            "show-options",
+            "-gqv",
+            "@runcat-roam",
             ";",
             // list-clients also requires a session, even without -t. The
             // format-only conditional can safely run before the first one.
@@ -85,6 +103,9 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
         if !output.status.success() || lines.next() != Some(generation) {
             return Ok(());
         }
+        let status_format = lines.next().unwrap_or("");
+        let roaming = matches!(lines.next(), Some("on" | "1"));
+        crate::track::sync(&tmux, status_format, roaming)?;
         let sessions = parse_clients(lines.map(str::to_owned));
         animations.retain(|session, _| sessions.contains_key(session));
         published.retain(|session, _| sessions.contains_key(session));
@@ -103,35 +124,47 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
                 .update(activity.count, now, activity.settings)
                 .to_owned();
             next_update = next_update.min(animation.next_update());
-            if published.get(&session).is_some_and(|value| value == &pose) {
+            let (position, left, moving_pose) = if roaming {
+                animation.roam(now)
+            } else {
+                (0, false, pose.clone())
+            };
+            let snapshot = (pose.clone(), animation.state(), position, left);
+            let previous = published.get(&session);
+            if previous == Some(&snapshot) {
                 continue;
             }
-            if !update.is_empty() {
-                update.push(";".to_owned());
+            if previous.is_none_or(|last| last.0 != pose) {
+                publish_option(&mut update, &session, "@runcat-frame", pose);
             }
-            update.extend([
-                "set-option".to_owned(),
-                "-t".to_owned(),
-                session.clone(),
-                "@runcat-frame".to_owned(),
-                pose.clone(),
-                ";".to_owned(),
-                "set-option".to_owned(),
-                "-t".to_owned(),
-                session.clone(),
-                "@runcat-state".to_owned(),
-                animation.state().to_owned(),
-            ]);
-            for client in activity.clients {
-                update.extend([
-                    ";".to_owned(),
-                    "refresh-client".to_owned(),
-                    "-S".to_owned(),
-                    "-t".to_owned(),
-                    client,
-                ]);
+            if previous.is_none_or(|last| last.1 != animation.state()) {
+                publish_option(
+                    &mut update,
+                    &session,
+                    "@runcat-state",
+                    animation.state().to_owned(),
+                );
             }
-            published.insert(session, pose);
+            if previous.is_none_or(|last| last.2 != position) {
+                publish_option(
+                    &mut update,
+                    &session,
+                    "@runcat-position",
+                    position.to_string(),
+                );
+            }
+            if previous.is_none_or(|last| last.3 != left) {
+                publish_option(
+                    &mut update,
+                    &session,
+                    "@runcat-direction",
+                    if left { "left" } else { "right" }.to_owned(),
+                );
+            }
+            if previous.is_none_or(|last| last.0 != snapshot.0 || last.3 != left) {
+                publish_option(&mut update, &session, "@runcat-roam-frame", moving_pose);
+            }
+            published.insert(session, snapshot);
         }
         if !update.is_empty() && !tmux.output(update)?.status.success() {
             published.clear();
@@ -152,16 +185,16 @@ mod tests {
     fn clients_are_grouped_by_session_with_independent_counts() {
         let sessions = parse_clients(
             [
-                "/dev/pts/1\t$1\t4\t2\t3\t12\tmedium\tclassic",
-                "/dev/pts/2\t$1\t4\t2\t3\t12\tmedium\tclassic",
-                "/dev/pts/3\t$2\t9\t1\t4\t8\tlarge\tpet-cats",
+                "/dev/pts/1\t$1\t4\t2\t3\t12\tmedium\tclassic\t0",
+                "/dev/pts/2\t$1\t4\t2\t3\t12\tmedium\tclassic\t0",
+                "/dev/pts/3\t$2\t9\t1\t4\t8\tlarge\tpet-cats\t15",
                 "invalid",
             ]
             .into_iter()
             .map(str::to_owned),
         );
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions["$1"].clients.len(), 2);
+        assert_eq!(sessions["$1"].count, 4);
         assert_eq!(sessions["$2"].count, 9);
         assert_eq!(sessions["$2"].settings.idle, 1.0);
         assert_eq!(

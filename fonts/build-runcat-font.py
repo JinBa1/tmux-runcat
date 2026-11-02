@@ -12,6 +12,7 @@ from fontTools.pens.basePen import BasePen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.svgLib.path import SVGPath
 from fontTools.ttLib import TTFont, TTLibError
+from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
 import pet_cats
 
@@ -138,7 +139,7 @@ def rename_font(font, family, style):
     # whose display names contain spaces or non-ASCII characters.
     ascii_family = unicodedata.normalize("NFKD", family).encode("ascii", "ignore").decode()
     postscript = re.sub(r"[^A-Za-z0-9-]", "", ascii_family)[:48] or "RunCat"
-    names = {1: family, 2: face, 3: f"{family}-{style}-runcat-v5",
+    names = {1: family, 2: face, 3: f"{family}-{style}-runcat-v7",
              4: f"{family} {face}", 6: f"{postscript}-{style}",
              16: family, 17: face, 18: f"{family} {face}", 21: family, 22: face}
     for record in list(font["name"].names):
@@ -202,7 +203,7 @@ def main():
         elif args.base_font:
             names = fonts["Regular"]["name"]
             base_family = names.getDebugName(16) or names.getDebugName(1) or args.base_font.stem
-            family = f"{base_family} RunCat v5"
+            family = f"{base_family} RunCat v7"
         else:
             family = Path(__file__).with_name("font-family.txt").read_text().strip()
         if not family or any(ord(char) < 32 or ord(char) == 127 for char in family):
@@ -227,6 +228,11 @@ def main():
             generated.append(destination)
     for style, font in fonts.items():
         original_cmap = font.getBestCmap().copy()
+        if not any(table.isUnicode() and table.format == 12 for table in font["cmap"].tables):
+            table = CmapSubtable.newSubtable(12)
+            table.platformID, table.platEncID, table.language = 3, 10, 0
+            table.cmap = original_cmap.copy()
+            font["cmap"].tables.append(table)
         advance = font["hmtx"][original_cmap[32]][0]
         units = font["head"].unitsPerEm
         baseline, margin = units * 0.02, units * 0.04
@@ -262,7 +268,7 @@ def main():
             contours = pet_frames[frame]["mono"] if is_pet else poses[frame]
             store_glyph(name, outline_glyph(contours, *geometry))
             for table in font["cmap"].tables:
-                if table.isUnicode() and table.format != 14:
+                if table.isUnicode() and table.format != 14 and (code <= 0xFFFF or table.format in (12, 13)):
                     table.cmap[code] = name
         font.setGlyphOrder(order)
         rename_font(font, family, style)

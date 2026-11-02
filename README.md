@@ -32,11 +32,11 @@ bash fonts/setup.sh
 
 The pinned font sources and build tools are bundled, so building the binary
 and fonts needs no network after cloning. Font setup installs both the clean
-JetBrainsMono Nerd Font family and `JetBrainsMono RunCat v5`, which adds
+JetBrainsMono Nerd Font family and `JetBrainsMono RunCat v7`, which adds
 the running and sleeping poses while preserving existing glyphs and spacing.
 
 On WSL, setup installs fonts on Windows and selects the combined font in stable
-Windows Terminal. On Linux, select `JetBrainsMono RunCat v5` in your terminal.
+Windows Terminal. On Linux, select `JetBrainsMono RunCat v7` in your terminal.
 See [font setup](fonts/README.md) for details and backups.
 
 To use your own base font, supply a regular monospaced static TrueType file:
@@ -45,7 +45,7 @@ To use your own base font, supply a regular monospaced static TrueType file:
 bash fonts/setup.sh --base-font '/path/to/MyMono-Regular.ttf'
 ```
 
-Setup creates a separate `<original family> RunCat v5` family, using the base
+Setup creates a separate `<original family> RunCat v7` family, using the base
 font's spacing and height for all cat sizes. Add `--bold-font`, `--italic-font`,
 and `--bold-italic-font` for matching faces, or `--family` to choose the output
 family name. These are font setup options; terminal fonts cannot be selected
@@ -80,6 +80,8 @@ can also be changed with `set-option` while the animation is running.
 | `@runcat-max-fps` | `0` | `0` or `unlimited` removes the cap; a positive FPS value sets an optional limit |
 | `@runcat-size` | `medium` | `small` (1 cell), `medium` (2 cells), `large` (3 cells), or `xlarge` (4 cells) |
 | `@runcat-skin` | `classic` | `classic` or `pet-cats` |
+| `@runcat-spin-chance` | `0` | Pet Cats: percent chance per second of running to start an OIIA-style spin (0–100) |
+| `@runcat-roam` | `off` | `on` lets the cat pace through the free space between the window list and right status |
 
 ```tmux
 set -g @runcat-idle 3
@@ -90,7 +92,7 @@ set -g @runcat-skin pet-cats
 ```
 
 The Pet Cats skin uses the first cat from [Pet Cats Pack by LuizMelo](https://luizmelo.itch.io/pet-cat-pack),
-bundled under CC0. Install the v5 fonts before selecting it. Both skins inherit
+bundled under CC0. Install the v7 fonts before selecting it. Both skins inherit
 the status foreground color, including on terminals with color-font support.
 For example, `#[fg=cyan]#{@runcat-frame}` draws a cyan cat; eye details remain
 cutouts. Both skins work with custom base fonts and all four sizes. Skin changes
@@ -113,6 +115,44 @@ Reactions use activity counts; no special Enter or Backspace bindings are added.
 The current action is exposed as `#{@runcat-state}` for optional status formats
 and troubleshooting.
 
+### Spinning and roaming
+
+Install the v7 font, then enable both features:
+
+```tmux
+set -g @runcat-skin pet-cats
+set -g @runcat-spin-chance 18
+set -g @runcat-roam on
+```
+
+While running, the cat gets one chance per second to start an OIIA-inspired
+spin in place. Its rotation speeds up and slows down with typing. It keeps
+rotating as long as you type, then resumes its usual
+rest behavior when typing pauses. Spins have an eight-second cooldown between
+starts and never delay the idle timeout. Set the chance to `0` to disable
+them. This is a visual expression; it does not play audio.
+
+Roaming uses the standard single-row tmux status layout, including Powerline.
+The cat moves while walking or running, faces its direction of travel, and
+turns around at either edge. It rests where it stopped. The available path is
+measured for each client from its terminal width and rendered left status,
+window list, and right status, so resizing and changing window names resize
+the path. The cat hides when there is no room. Theme reloads preserve roaming.
+Remove `#{@runcat-frame}` from any stationary status segment when enabling
+roaming, so the cat is drawn once. Custom layouts without the standard
+right-aligned status block keep their existing layout.
+
+For terminals that support synchronized updates, add the tmux `sync` terminal
+feature before attaching a client. This presents fast status redraws together
+and avoids cursor flashes between partial updates. For Windows Terminal with
+`TERM=xterm-256color`, add this to your tmux configuration:
+
+```tmux
+set -as terminal-features ',xterm-256color:sync'
+```
+
+Then attach a new client.
+
 Running speed follows the last second's key rate: the minimum plus 0.75 FPS
 per key per second, with smooth acceleration and deceleration. There is no
 default maximum. Frames follow their own deadlines rather than a fixed 20 Hz
@@ -126,7 +166,7 @@ Size updates apply immediately, including while sleeping. Numeric aliases
 `1`, `2`, `3`, and `4` are accepted; invalid values use `medium`. All sizes share
 one font installation. The large preset uses more of the available row height,
 and `xlarge` uses the full existing line box, including the descent. The rest
-of the terminal keeps its normal font size. Install the v5 font to use `xlarge`.
+of the terminal keeps its normal font size. Install the v7 font to use `xlarge`.
 
 ## Behavior
 
@@ -163,6 +203,7 @@ cargo test --locked --offline
 cargo build --release --locked --offline
 python3 fonts/tests/test_build.py
 python3 tests/live_tmux.py
+python3 tests/roaming_tmux.py
 bash -n runcat.tmux fonts/setup.sh
 ```
 

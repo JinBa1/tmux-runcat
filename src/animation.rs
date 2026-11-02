@@ -1,3 +1,4 @@
+use crate::patrol::Patrol;
 use crate::pet::{Activity, Pet};
 use std::collections::VecDeque;
 
@@ -65,6 +66,7 @@ pub struct Settings {
     pub maximum: Option<f64>,
     pub size: CatSize,
     pub skin: Skin,
+    pub spin_chance: f64,
 }
 
 impl Default for Settings {
@@ -75,6 +77,7 @@ impl Default for Settings {
             maximum: None,
             size: CatSize::Medium,
             skin: Skin::Classic,
+            spin_chance: 0.0,
         }
     }
 }
@@ -100,7 +103,18 @@ impl Settings {
                 .map(|value| value.max(minimum)),
             size: CatSize::parse(size),
             skin: Skin::parse(skin),
+            spin_chance: 0.0,
         }
+    }
+
+    pub fn with_spin_chance(mut self, value: &str) -> Self {
+        self.spin_chance = value
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .unwrap_or(0.0)
+            .clamp(0.0, 100.0);
+        self
     }
 }
 
@@ -118,6 +132,7 @@ pub struct Animation {
     skin: Skin,
     state: &'static str,
     pet: Pet,
+    patrol: Patrol,
 }
 
 impl Animation {
@@ -136,6 +151,7 @@ impl Animation {
             skin: Skin::Classic,
             state: "sleep",
             pet: Pet::new(now),
+            patrol: Patrol::new(now),
         }
     }
 
@@ -171,6 +187,7 @@ impl Animation {
                 fps: self.fps,
                 previous_fps,
                 size: settings.size,
+                spin_chance: settings.spin_chance,
             });
             self.state = self.pet.action;
             return &self.pose;
@@ -217,6 +234,16 @@ impl Animation {
 
     pub fn state(&self) -> &'static str {
         self.state
+    }
+
+    pub fn roam(&mut self, now: f64) -> (u16, bool, String) {
+        let (position, left) = self.patrol.update(now, self.state, self.fps);
+        let pose = if left && self.skin == Skin::PetCats {
+            crate::pet::mirror(&self.pose)
+        } else {
+            self.pose.clone()
+        };
+        (position, left, pose)
     }
 
     pub fn next_update(&self) -> f64 {
@@ -508,5 +535,89 @@ mod tests {
         );
         assert_eq!(Skin::parse(" PET-CATS "), Skin::PetCats);
         assert_eq!(Skin::parse("invalid"), Skin::Classic);
+    }
+
+    #[test]
+    fn spinning_continues_while_typing_then_stops_on_pause() {
+        let settings = Settings {
+            skin: Skin::PetCats,
+            spin_chance: 100.0,
+            ..Settings::default()
+        };
+        let mut cat = Animation::new(0, 0.0);
+        cat.update(1, 0.1, settings);
+        cat.update(20, 0.8, settings);
+        assert_eq!(cat.state(), "run");
+        let first = cat.update(40, 1.1, settings).to_owned();
+        assert_eq!(cat.state(), "spin");
+        assert!(
+            first
+                .chars()
+                .all(|c| (0x100000..0x1000a0).contains(&(c as u32)))
+        );
+        assert_ne!(cat.update(50, 1.2, settings), first);
+        assert_eq!(cat.state(), "spin");
+        for step in 0..30 {
+            cat.update(60 + step * 10, 1.3 + step as f64 * 0.1, settings);
+            assert_eq!(cat.state(), "spin", "spin stopped while keys kept arriving");
+        }
+        cat.update(350, 4.57, settings);
+        assert_ne!(cat.state(), "spin", "spin continued after typing paused");
+        cat.update(370, 4.6, settings);
+        assert_eq!(cat.state(), "run", "spin cooldown was ignored");
+        cat.update(370, 6.61, settings);
+        assert_eq!(cat.state(), "sleep");
+        assert_eq!(Settings::default().spin_chance, 0.0);
+        assert_eq!(Settings::default().with_spin_chance("NaN").spin_chance, 0.0);
+        assert_eq!(
+            Settings::default().with_spin_chance("200").spin_chance,
+            100.0
+        );
+    }
+
+    #[test]
+    fn spin_accelerates_with_typing_and_keeps_fractional_progress() {
+        let settings = Settings {
+            skin: Skin::PetCats,
+            spin_chance: 100.0,
+            ..Settings::default()
+        };
+        let mut slow = Animation::new(0, 0.0);
+        let mut fast = Animation::new(0, 0.0);
+        for cat in [&mut slow, &mut fast] {
+            cat.update(1, 0.1, settings);
+        }
+        slow.update(20, 0.8, settings);
+        fast.update(100, 0.8, settings);
+        slow.update(40, 1.1, settings);
+        fast.update(200, 1.1, settings);
+        assert_eq!(slow.state(), "spin");
+        assert_eq!(fast.state(), "spin");
+        assert!(fast.next_update() - 1.1 < (slow.next_update() - 1.1) * 0.5);
+
+        let first = fast.update(220, 1.105, settings).to_owned();
+        let second = fast.update(240, 1.11, settings).to_owned();
+        assert_ne!(
+            first, second,
+            "spin frames did not advance at high typing speed"
+        );
+    }
+
+    #[test]
+    fn roaming_turns_the_pet_to_face_its_travel_direction() {
+        let settings = Settings {
+            skin: Skin::PetCats,
+            ..Settings::default()
+        };
+        let mut cat = Animation::new(0, 0.0);
+        cat.update(1, 0.0, settings);
+        cat.roam(0.0);
+        cat.update(100, 4.0, settings);
+        let (_, left, pose) = cat.roam(4.0);
+        assert!(left);
+        assert!(
+            pose.chars()
+                .all(|c| (0x101000..0x10135c).contains(&(c as u32)))
+        );
     }
 }
