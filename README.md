@@ -75,7 +75,7 @@ can also be changed with `set-option` while the animation is running.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `@runcat-idle` | `2` | Idle seconds before sleeping (0.1–3600) |
+| `@runcat-idle` | `2` | Maximum idle seconds before sleeping (0.1–3600); Pet Cats may finish short gestures earlier |
 | `@runcat-min-fps` | `3` | Minimum running speed (1–20 FPS) |
 | `@runcat-max-fps` | `0` | `0` or `unlimited` removes the cap; a positive FPS value sets an optional limit |
 | `@runcat-size` | `medium` | `small` (1 cell), `medium` (2 cells), `large` (3 cells), or `xlarge` (4 cells) |
@@ -84,6 +84,7 @@ can also be changed with `set-option` while the animation is running.
 | `@runcat-roam` | `off` | `on` lets the cat pace through the free space between the window list and right status |
 | `@runcat-wall-chance` | `35` | Pet Cats while roaming: chance to react at an end (0–100); bumps require running |
 | `@runcat-wall-debug` | `off` | Pet Cats while roaming: automatically run and play each edge reaction in order |
+| `@runcat-color` | `inherit` | Roaming foreground: ANSI color name, `colour0`–`colour255`, `#RRGGBB`, `default`, or `inherit` |
 
 ```tmux
 set -g @runcat-idle 3
@@ -94,8 +95,9 @@ set -g @runcat-skin pet-cats
 ```
 
 The Pet Cats skin uses the first cat from [Pet Cats Pack by LuizMelo](https://luizmelo.itch.io/pet-cat-pack),
-bundled under CC0. Install the v10 fonts before selecting it. Both skins inherit
-the status foreground color, including on terminals with color-font support.
+bundled under CC0. Install the v10 fonts before selecting it. Both skins use
+foreground-colored glyphs, including on terminals with color-font support.
+Roaming inherits the status foreground unless `@runcat-color` is set.
 For example, `#[fg=cyan]#{@runcat-frame}` draws a cyan cat; eye details remain
 cutouts. Both skins work with custom base fonts and all four sizes. Skin changes
 apply live.
@@ -104,15 +106,16 @@ apply live.
 | --- | --- |
 | First key after sleep | A short stretch, with continued typing still counted |
 | Gentle typing | Walk |
-| 8+ keys in the last second | Run, with uncapped speed following typing rate |
+| Sustained faster typing | Ease into running, with uncapped speed following typing rate |
 | Brief pause | Rotate between grooming, idle, scratching, meowing, and sitting |
 | Approaching the idle timeout | Lie down |
 | Idle timeout | Sleep with subtle breathing |
 | Another 30 seconds of rest | Alternate sleeping pose |
 
-The sleep timeout is still `@runcat-idle` (2 seconds by default). Wake and
-bedtime transitions shorten for smaller timeout values. New input interrupts
-pause gestures and lying down immediately. There is no Zzz text or audio.
+`@runcat-idle` is a maximum (2 seconds by default). After input pauses, the
+cat slows into a visible walk for up to 2 seconds, performs one gesture, then
+lies down and sleeps. Short gestures finish earlier. New input interrupts
+gestures and lying down immediately. There is no Zzz text or audio.
 Reactions use activity counts; no special Enter or Backspace bindings are added.
 The current action is exposed as `#{@runcat-state}` for optional status formats
 and troubleshooting.
@@ -126,6 +129,7 @@ set -g @runcat-skin pet-cats
 set -g @runcat-spin-chance 18
 set -g @runcat-roam on
 set -g @runcat-wall-chance 35
+set -g @runcat-color cyan
 ```
 
 While running, the cat gets one chance per second to start an OIIA-inspired
@@ -141,7 +145,11 @@ The cat moves while walking or running, faces its direction of travel, and
 turns around at either edge. It rests where it stopped. The available path is
 measured for each client from its terminal width and rendered left status,
 window list, and right status, so resizing and changing window names resize
-the path. The cat hides when there is no room. Theme reloads preserve roaming.
+the path. Positions retain fractional terminal cells, so width does not
+change speed. Walking travels one cat width per gait cycle and running travels
+1.5 widths; footfalls and travel share the same cadence. Spinning and resting
+do not move the cat. The cat hides when there is no room. Theme reloads
+preserve roaming.
 Remove `#{@runcat-frame}` from any stationary status segment when enabling
 roaming, so the cat is drawn once. Custom layouts without the standard
 right-aligned status block keep their existing layout.
@@ -152,7 +160,12 @@ bump its head and stumble back, or leap at the edge and bounce back.
 While running, head bump and parkour are each twice as likely as scratch;
 walking keeps scratch at its previous frequency. Set
 `@runcat-wall-chance 0` to disable reactions or `100` to trigger one at every
-end. During parkour, it turns at the edge before running back.
+end. During parkour, it turns at the edge before running back. Each attached
+client reacts independently when its cat reaches its own edge.
+
+`@runcat-color` changes live and colors roaming poses, including wall actions.
+Invalid values fall back to the inherited status foreground. The setting does
+not recolor neighboring status content.
 
 To inspect every edge animation without typing, enable debug mode:
 
