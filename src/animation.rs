@@ -67,6 +67,8 @@ pub struct Settings {
     pub size: CatSize,
     pub skin: Skin,
     pub spin_chance: f64,
+    pub wall_chance: f64,
+    pub wall_debug: bool,
 }
 
 impl Default for Settings {
@@ -78,6 +80,8 @@ impl Default for Settings {
             size: CatSize::Medium,
             skin: Skin::Classic,
             spin_chance: 0.0,
+            wall_chance: 35.0,
+            wall_debug: false,
         }
     }
 }
@@ -104,6 +108,8 @@ impl Settings {
             size: CatSize::parse(size),
             skin: Skin::parse(skin),
             spin_chance: 0.0,
+            wall_chance: 35.0,
+            wall_debug: false,
         }
     }
 
@@ -114,6 +120,24 @@ impl Settings {
             .filter(|value| value.is_finite())
             .unwrap_or(0.0)
             .clamp(0.0, 100.0);
+        self
+    }
+
+    pub fn with_wall_chance(mut self, value: &str) -> Self {
+        self.wall_chance = value
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .unwrap_or(35.0)
+            .clamp(0.0, 100.0);
+        self
+    }
+
+    pub fn with_wall_debug(mut self, value: &str) -> Self {
+        self.wall_debug = matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "on" | "1" | "true" | "yes"
+        );
         self
     }
 }
@@ -171,24 +195,43 @@ impl Animation {
         let rate: f64 = self.samples.iter().map(|(_, count)| *count as f64).sum();
         if settings.skin == Skin::PetCats {
             let previous_fps = self.fps;
-            if now - self.last_input >= settings.idle {
+            if !settings.wall_debug && now - self.last_input >= settings.idle {
                 self.samples.clear();
                 self.fps = settings.minimum;
             } else {
                 self.adjust_speed(rate, elapsed, settings);
             }
+            self.pet.set_wall_debug(settings.wall_debug);
+            if settings.wall_debug {
+                self.fps = self.fps.max(20.0);
+                if let Some(maximum) = settings.maximum {
+                    self.fps = self.fps.min(maximum);
+                }
+            }
             self.pose = self.pet.update(Activity {
                 now,
                 elapsed,
-                last_input: self.last_input,
+                last_input: if settings.wall_debug {
+                    now
+                } else {
+                    self.last_input
+                },
                 pressed: delta > 0,
-                rate,
+                rate: if settings.wall_debug {
+                    rate.max(12.0)
+                } else {
+                    rate
+                },
                 idle: settings.idle,
                 fps: self.fps,
                 previous_fps,
                 maximum: settings.maximum,
                 size: settings.size,
-                spin_chance: settings.spin_chance,
+                spin_chance: if settings.wall_debug {
+                    0.0
+                } else {
+                    settings.spin_chance
+                },
             });
             self.state = self.pet.action;
             return &self.pose;
@@ -237,14 +280,31 @@ impl Animation {
         self.state
     }
 
-    pub fn roam(&mut self, now: f64) -> (u16, bool, String) {
-        let (position, left) = self.patrol.update(now, self.state, self.fps);
-        let pose = if left && self.skin == Skin::PetCats {
+    pub fn pose(&self) -> &str {
+        &self.pose
+    }
+
+    pub fn roam(&mut self, now: f64, settings: Settings) -> (u16, bool, String) {
+        let frame = self.patrol.update(now, self.state, self.fps);
+        if frame.arrived
+            && self.skin == Skin::PetCats
+            && let Some(pose) = self.pet.hit_wall(
+                now,
+                settings.wall_chance,
+                settings.wall_debug,
+                settings.size,
+            )
+        {
+            self.patrol.wall_event(now, self.fps);
+            self.pose = pose;
+            self.state = self.pet.action;
+        }
+        let pose = if frame.mirror && self.skin == Skin::PetCats {
             crate::pet::mirror(&self.pose)
         } else {
             self.pose.clone()
         };
-        (position, left, pose)
+        (frame.position, frame.left, pose)
     }
 
     pub fn next_update(&self) -> f64 {
@@ -374,11 +434,57 @@ mod tests {
             (settings.idle, settings.minimum, settings.maximum),
             (2.0, 3.0, None)
         );
+        assert_eq!(settings.wall_chance, 35.0);
+        assert_eq!(settings.with_wall_chance("-10").wall_chance, 0.0);
+        assert_eq!(settings.with_wall_chance("150").wall_chance, 100.0);
+        assert_eq!(settings.with_wall_chance("NaN").wall_chance, 35.0);
+        assert!(!settings.wall_debug);
+        assert!(settings.with_wall_debug("on").wall_debug);
+        assert!(settings.with_wall_debug("1").wall_debug);
+        assert!(!settings.with_wall_debug("off").wall_debug);
         let settings = Settings::parse("0.5", "8", "20", "medium", "classic");
         let mut cat = Animation::new(0, 0.0);
         cat.update(1, 0.1, settings);
         assert!(cat.fps >= 8.0);
         assert_eq!(cat.update(1, 0.61, settings), SLEEP_POSE);
+    }
+
+    #[test]
+    fn wall_debug_paces_without_input_and_repeats_reactions_in_order() {
+        let mut cat = Animation::new(0, 0.0);
+        let settings = Settings {
+            skin: Skin::PetCats,
+            wall_chance: 0.0,
+            spin_chance: 100.0,
+            wall_debug: true,
+            ..Settings::default()
+        };
+        let mut actions = Vec::new();
+        let mut last = "";
+        for step in 0..=1200 {
+            let now = step as f64 * 0.05;
+            cat.update(0, now, settings);
+            let (position, _, _) = cat.roam(now, settings);
+            let state = cat.state();
+            if matches!(state, "head-bump" | "wall-scratch" | "parkour") && state != last {
+                assert!(position <= 35 || position >= 965, "{state} at {position}");
+                actions.push(state);
+                if actions.len() == 4 {
+                    break;
+                }
+            }
+            last = state;
+        }
+        assert_eq!(
+            actions,
+            ["head-bump", "wall-scratch", "parkour", "head-bump"]
+        );
+        let off = Settings {
+            wall_debug: false,
+            ..settings
+        };
+        cat.update(0, 62.0, off);
+        assert_eq!(cat.state(), "sleep");
     }
 
     #[test]
@@ -640,17 +746,50 @@ mod tests {
     fn roaming_turns_the_pet_to_face_its_travel_direction() {
         let settings = Settings {
             skin: Skin::PetCats,
+            wall_chance: 0.0,
             ..Settings::default()
         };
         let mut cat = Animation::new(0, 0.0);
         cat.update(1, 0.0, settings);
-        cat.roam(0.0);
+        cat.roam(0.0, settings);
         cat.update(100, 4.0, settings);
-        let (_, left, pose) = cat.roam(4.0);
+        assert!(!cat.roam(4.0, settings).1);
+        cat.update(101, 4.1, settings);
+        let (_, left, pose) = cat.roam(4.1, settings);
         assert!(left);
         assert!(
             pose.chars()
                 .all(|c| (0x101000..0x10135c).contains(&(c as u32)))
         );
+    }
+
+    #[test]
+    fn edge_reaction_holds_facing_wall_then_recovers_and_turns() {
+        let settings = Settings {
+            skin: Skin::PetCats,
+            wall_chance: 100.0,
+            ..Settings::default()
+        };
+        let mut cat = Animation::new(0, 0.0);
+        cat.update(1, 0.0, settings);
+        cat.roam(0.0, settings);
+        cat.update(100, 4.0, settings);
+        let (edge, left, _) = cat.roam(4.0, settings);
+        let reaction = cat.state();
+        assert!(matches!(reaction, "head-bump" | "wall-scratch" | "parkour"));
+        assert_eq!((edge, left), (1000, false));
+        cat.update(101, 4.5, settings);
+        let (held, left, _) = cat.roam(4.5, settings);
+        assert_eq!(cat.state(), reaction);
+        assert!(!left);
+        if reaction == "head-bump" {
+            assert!((965..1000).contains(&held));
+        } else {
+            assert_eq!(held, 1000);
+        }
+        cat.update(120, 6.5, settings);
+        let (returning, left, _) = cat.roam(6.5, settings);
+        assert!(left && returning < held);
+        assert!(matches!(cat.state(), "walk" | "run"));
     }
 }

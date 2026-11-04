@@ -59,7 +59,8 @@ def main():
                                 ("window-status-current-format", "[W]"),
                                 ("window-status-format", "[W]"),
                                 ("@runcat-skin", "pet-cats"), ("@runcat-size", "large"),
-                                ("@runcat-roam", "on"), ("@runcat-spin-chance", "0")]:
+                                ("@runcat-roam", "on"), ("@runcat-spin-chance", "0"),
+                                ("@runcat-wall-chance", "0")]:
                 run("set-option", "-g", name, value)
             baseline = run("show-options", "-gqv", "status-format[0]")
             client = subprocess.Popen(command + ["attach-session", "-t", "test"],
@@ -125,6 +126,25 @@ def main():
             assert observed == {"left", "right"}, observed
             assert max(positions) - min(positions) > 700, positions
 
+            run("set-option", "-g", "@runcat-wall-chance", "100")
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                run("set-option", "-F", "-t", "test", "@runcat-keys", "#{e|+:#{@runcat-keys},8}")
+                reaction = option("@runcat-state")
+                if reaction in ("head-bump", "wall-scratch", "parkour"):
+                    side = option("@runcat-direction")
+                    position = int(option("@runcat-position"))
+                    assert (position <= 35) if side == "left" else (position >= 965)
+                    pose = option("@runcat-roam-frame")
+                    lower = 0x103000 if side == "left" else 0x102000
+                    assert all(lower <= ord(ch) < lower + 0x26c for ch in pose), repr(pose)
+                    break
+                time.sleep(0.06)
+            assert reaction in ("head-bump", "wall-scratch", "parkour"), reaction
+            run("set-option", "-g", "@runcat-wall-chance", "0")
+            time.sleep(0.2)
+            assert option("@runcat-state") == reaction, "wall reaction stopped early"
+
             run("set-option", "-g", "@runcat-spin-chance", "100")
             states = set()
             deadline = time.monotonic() + 3
@@ -148,6 +168,19 @@ def main():
             time.sleep(0.25)
             assert option("@runcat-position") == position, "sleeping cat moved"
 
+            # Debug mode patrols without new keys, ignores the zero wall
+            # chance, and starts its fixed sequence at head bump.
+            keys = option("@runcat-keys")
+            run("set-option", "-g", "@runcat-wall-debug", "on")
+            wait_for(lambda: option("@runcat-state") == "head-bump",
+                     "debug mode did not start with head bump", timeout=8)
+            wait_for(lambda: option("@runcat-state") == "wall-scratch",
+                     "debug mode did not play wall scratch second", timeout=9)
+            assert option("@runcat-keys") == keys, "debug mode generated key activity"
+            run("set-option", "-g", "@runcat-wall-debug", "off")
+            wait_for(lambda: option("@runcat-state") == "sleep",
+                     "debug mode did not stop", timeout=3)
+
             # Simulate a theme resetting the status format. The worker must
             # restore its overlay and remove it cleanly when disabled.
             run("set-option", "-g", "status-format[0]", baseline)
@@ -156,7 +189,7 @@ def main():
             run("set-option", "-g", "@runcat-roam", "off")
             wait_for(lambda: run("show-options", "-gqv", "status-format[0]") == baseline,
                      "disabling roaming did not restore the status format")
-            print("PASS: available width, resizing, pacing, direction, spinning, sleep, status commands and theme reload")
+            print("PASS: available width, resizing, pacing, wall reactions, debug cycle, spinning, sleep, status commands and theme reload")
         finally:
             stop.set()
             subprocess.run(command + ["kill-server"], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

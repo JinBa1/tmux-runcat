@@ -32,11 +32,11 @@ bash fonts/setup.sh
 
 The pinned font sources and build tools are bundled, so building the binary
 and fonts needs no network after cloning. Font setup installs both the clean
-JetBrainsMono Nerd Font family and `JetBrainsMono RunCat v7`, which adds
+JetBrainsMono Nerd Font family and `JetBrainsMono RunCat v10`, which adds
 the running and sleeping poses while preserving existing glyphs and spacing.
 
 On WSL, setup installs fonts on Windows and selects the combined font in stable
-Windows Terminal. On Linux, select `JetBrainsMono RunCat v7` in your terminal.
+Windows Terminal. On Linux, select `JetBrainsMono RunCat v10` in your terminal.
 See [font setup](fonts/README.md) for details and backups.
 
 To use your own base font, supply a regular monospaced static TrueType file:
@@ -45,7 +45,7 @@ To use your own base font, supply a regular monospaced static TrueType file:
 bash fonts/setup.sh --base-font '/path/to/MyMono-Regular.ttf'
 ```
 
-Setup creates a separate `<original family> RunCat v7` family, using the base
+Setup creates a separate `<original family> RunCat v10` family, using the base
 font's spacing and height for all cat sizes. Add `--bold-font`, `--italic-font`,
 and `--bold-italic-font` for matching faces, or `--family` to choose the output
 family name. These are font setup options; terminal fonts cannot be selected
@@ -82,6 +82,8 @@ can also be changed with `set-option` while the animation is running.
 | `@runcat-skin` | `classic` | `classic` or `pet-cats` |
 | `@runcat-spin-chance` | `0` | Pet Cats: percent chance per second of running to start an OIIA-style spin (0–100) |
 | `@runcat-roam` | `off` | `on` lets the cat pace through the free space between the window list and right status |
+| `@runcat-wall-chance` | `35` | Pet Cats while roaming: chance to react at an end (0–100); bumps require running |
+| `@runcat-wall-debug` | `off` | Pet Cats while roaming: automatically run and play each edge reaction in order |
 
 ```tmux
 set -g @runcat-idle 3
@@ -92,7 +94,7 @@ set -g @runcat-skin pet-cats
 ```
 
 The Pet Cats skin uses the first cat from [Pet Cats Pack by LuizMelo](https://luizmelo.itch.io/pet-cat-pack),
-bundled under CC0. Install the v7 fonts before selecting it. Both skins inherit
+bundled under CC0. Install the v10 fonts before selecting it. Both skins inherit
 the status foreground color, including on terminals with color-font support.
 For example, `#[fg=cyan]#{@runcat-frame}` draws a cyan cat; eye details remain
 cutouts. Both skins work with custom base fonts and all four sizes. Skin changes
@@ -117,12 +119,13 @@ and troubleshooting.
 
 ### Spinning and roaming
 
-Install the v7 font, then enable both features:
+Install the v10 font, then enable both features:
 
 ```tmux
 set -g @runcat-skin pet-cats
 set -g @runcat-spin-chance 18
 set -g @runcat-roam on
+set -g @runcat-wall-chance 35
 ```
 
 While running, the cat gets one chance per second to start an OIIA-inspired
@@ -142,6 +145,28 @@ the path. The cat hides when there is no room. Theme reloads preserve roaming.
 Remove `#{@runcat-frame}` from any stationary status segment when enabling
 roaming, so the cat is drawn once. Custom layouts without the standard
 right-aligned status block keep their existing layout.
+
+At either end, the Pet Cats skin has a 35% chance to react before turning.
+A walking cat may stretch upward and scratch. A running cat may scratch,
+bump its head and stumble back, or leap at the edge and bounce back.
+While running, head bump and parkour are each twice as likely as scratch;
+walking keeps scratch at its previous frequency. Set
+`@runcat-wall-chance 0` to disable reactions or `100` to trigger one at every
+end. During parkour, it turns at the edge before running back.
+
+To inspect every edge animation without typing, enable debug mode:
+
+```tmux
+set -g @runcat-skin pet-cats
+set -g @runcat-roam on
+set -g @runcat-wall-debug on
+```
+
+The cat runs between the ends and plays head bump, wall scratch, and
+parkour in that order, then repeats. Debug mode ignores
+`@runcat-wall-chance` and disables spinning while active. Set
+`@runcat-wall-debug off` to resume normal behavior. Turning it on again starts
+the sequence from head bump.
 
 For terminals that support synchronized updates, add the tmux `sync` terminal
 feature before attaching a client. This presents fast status redraws together
@@ -167,7 +192,7 @@ Size updates apply immediately, including while sleeping. Numeric aliases
 `1`, `2`, `3`, and `4` are accepted; invalid values use `medium`. All sizes share
 one font installation. The large preset uses more of the available row height,
 and `xlarge` uses the full existing line box, including the descent. The rest
-of the terminal keeps its normal font size. Install the v7 font to use `xlarge`.
+of the terminal keeps its normal font size. Install the v10 font to use `xlarge`.
 
 ## Behavior
 

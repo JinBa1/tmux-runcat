@@ -12,3 +12,6 @@ lick-paw	Licking 1	5	loop
 lick-body	Licking 2	5	loop
 stretch	Stretching	13	once
 spin	-	16	spin
+head-bump	-	20	wall-bump
+wall-scratch	-	16	wall-scratch
+parkour	-	26	wall-parkour

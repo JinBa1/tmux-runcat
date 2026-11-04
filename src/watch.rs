@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(50);
-const FORMAT: &str = "#{client_name}\t#{session_id}\t#{@runcat-keys}\t#{@runcat-idle}\t#{@runcat-min-fps}\t#{@runcat-max-fps}\t#{@runcat-size}\t#{@runcat-skin}\t#{@runcat-spin-chance}";
+const FORMAT: &str = "#{client_name}\t#{session_id}\t#{@runcat-keys}\t#{@runcat-idle}\t#{@runcat-min-fps}\t#{@runcat-max-fps}\t#{@runcat-size}\t#{@runcat-skin}\t#{@runcat-spin-chance}\t#{@runcat-wall-chance}\t#{@runcat-wall-debug}";
 
 struct Session {
     count: u64,
@@ -20,7 +20,7 @@ fn parse_clients(lines: impl Iterator<Item = String>) -> HashMap<String, Session
     let mut sessions: HashMap<String, Session> = HashMap::new();
     for line in lines {
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != 9 {
+        if fields.len() != 11 {
             continue;
         }
         sessions
@@ -28,7 +28,9 @@ fn parse_clients(lines: impl Iterator<Item = String>) -> HashMap<String, Session
             .or_insert_with(|| Session {
                 count: fields[2].parse().unwrap_or(0),
                 settings: Settings::parse(fields[3], fields[4], fields[5], fields[6], fields[7])
-                    .with_spin_chance(fields[8]),
+                    .with_spin_chance(fields[8])
+                    .with_wall_chance(fields[9])
+                    .with_wall_debug(fields[10]),
             });
     }
     sessions
@@ -120,15 +122,14 @@ pub fn run(socket: &OsStr, pid: &OsStr, generation: &str) -> io::Result<()> {
             let animation = animations
                 .entry(session.clone())
                 .or_insert_with(|| Animation::new(activity.count, now));
-            let pose = animation
-                .update(activity.count, now, activity.settings)
-                .to_owned();
-            next_update = next_update.min(animation.next_update());
+            animation.update(activity.count, now, activity.settings);
             let (position, left, moving_pose) = if roaming {
-                animation.roam(now)
+                animation.roam(now, activity.settings)
             } else {
-                (0, false, pose.clone())
+                (0, false, animation.pose().to_owned())
             };
+            let pose = animation.pose().to_owned();
+            next_update = next_update.min(animation.next_update());
             let snapshot = (pose.clone(), animation.state(), position, left);
             let previous = published.get(&session);
             if previous == Some(&snapshot) {
@@ -185,9 +186,9 @@ mod tests {
     fn clients_are_grouped_by_session_with_independent_counts() {
         let sessions = parse_clients(
             [
-                "/dev/pts/1\t$1\t4\t2\t3\t12\tmedium\tclassic\t0",
-                "/dev/pts/2\t$1\t4\t2\t3\t12\tmedium\tclassic\t0",
-                "/dev/pts/3\t$2\t9\t1\t4\t8\tlarge\tpet-cats\t15",
+                "/dev/pts/1\t$1\t4\t2\t3\t12\tmedium\tclassic\t0\t35\toff",
+                "/dev/pts/2\t$1\t4\t2\t3\t12\tmedium\tclassic\t0\t35\toff",
+                "/dev/pts/3\t$2\t9\t1\t4\t8\tlarge\tpet-cats\t15\t75\ton",
                 "invalid",
             ]
             .into_iter()
@@ -205,5 +206,7 @@ mod tests {
             sessions["$2"].settings.size,
             crate::animation::CatSize::Large
         );
+        assert_eq!(sessions["$2"].settings.wall_chance, 75.0);
+        assert!(sessions["$2"].settings.wall_debug);
     }
 }

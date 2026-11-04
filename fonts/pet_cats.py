@@ -5,11 +5,14 @@ import zipfile
 
 import png
 import spinning_cat
+import wall_cat
 
 BASE = 0xF700
 XLARGE_BASE = 0xE400
 SPIN_BASE = 0x100000
 MIRROR_BASE = 0x101000
+WALL_BASE = 0x102000
+WALL_MIRROR_BASE = 0x103000
 MANIFEST = Path(__file__).with_name("pet-cats") / "animations.tsv"
 
 
@@ -44,6 +47,12 @@ def poses():
                     mono = rectangles(spinning_cat.pixels(frame, count), lambda pixel: pixel[3])
                     frames.append({"mono": mono, "action": name})
                 continue
+            if mode.startswith("wall-"):
+                for frame in range(count):
+                    mono = rectangles(wall_cat.pixels(mode, frame, count, archive),
+                                      lambda pixel: pixel[3] and pixel[1] < pixel[0]*0.95)
+                    frames.append({"mono": mono, "action": name})
+                continue
             path = f"Pet Cats Pack/Cat-1/Cat-1-{filename}.png"
             width, height, rows, _ = png.Reader(bytes=archive.read(path)).asRGBA8()
             rows = [[tuple(row[x:x+4]) for x in range(0, len(row), 4)] for row in rows]
@@ -69,6 +78,7 @@ def poses():
     bounds = (min(x for x, _ in points), max(x for x, _ in points),
               min(y for _, y in points), max(y for _, y in points))
     original = next(index for index, frame in enumerate(frames) if frame["action"] == "spin")
+    wall_start = original + next(int(count) for name, _, count, _ in animations() if name == "spin")
     layout = [(BASE + index*6 + offset + half, cells, half, index)
               for index in range(original)
               for cells, offset in ((1, 0), (2, 1), (3, 3)) for half in range(cells)]
@@ -76,13 +86,20 @@ def poses():
                for index in range(original) for half in range(4)]
     sizes = ((1, 0), (2, 1), (3, 3), (4, 6))
     layout += [(SPIN_BASE + (index-original)*10 + offset + half, cells, half, index)
-               for index in range(original, len(frames))
+               for index in range(original, wall_start)
+               for cells, offset in sizes for half in range(cells)]
+    layout += [(WALL_BASE + (index-wall_start)*10 + offset + half, cells, half, index)
+               for index in range(wall_start, len(frames))
                for cells, offset in sizes for half in range(cells)]
     normal_count = len(frames)
     frames += [{"mono": [[(50-x, y) for x, y in reversed(contour)]
                           for contour in frame["mono"]], "action": frame["action"]}
                for frame in frames[:]]
     layout += [(MIRROR_BASE + index*10 + offset + half, cells, half, normal_count+index)
-               for index in range(normal_count)
+               for index in range(wall_start)
+               for cells, offset in sizes for half in range(cells)]
+    layout += [(WALL_MIRROR_BASE + (index-wall_start)*10 + offset + half,
+                cells, half, normal_count+index)
+               for index in range(wall_start, normal_count)
                for cells, offset in sizes for half in range(cells)]
     return frames, layout, bounds

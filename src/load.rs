@@ -53,6 +53,8 @@ pub fn run(plugin: &Path, explicit: Option<(&OsStr, &OsStr)>) -> io::Result<()> 
         ("@runcat-size", "medium"),
         ("@runcat-skin", "classic"),
         ("@runcat-spin-chance", "0"),
+        ("@runcat-wall-chance", "35"),
+        ("@runcat-wall-debug", "off"),
         ("@runcat-roam", "off"),
     ] {
         if !tmux.output(["show-options", "-gv", name])?.status.success() {

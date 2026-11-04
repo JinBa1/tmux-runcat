@@ -1,5 +1,6 @@
 mod animation;
 mod load;
+mod parkour;
 mod patrol;
 mod pet;
 mod tmux;

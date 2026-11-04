@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 FONT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(FONT_DIR / "vendor/fonttools-4.67.0-py3-none-any.whl"))
@@ -18,6 +19,7 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont, newTable
 import pet_cats
+import wall_cat
 
 
 class FontBuildTests(unittest.TestCase):
@@ -73,7 +75,7 @@ class FontBuildTests(unittest.TestCase):
 
     def test_sleep_pose_is_bundled_and_fits_two_cells(self):
         font = TTFont(self.data / "generated/RunCat-Regular.ttf")
-        self.assertEqual(font["name"].getDebugName(1), "JetBrainsMono RunCat v7")
+        self.assertEqual(font["name"].getDebugName(1), "JetBrainsMono RunCat v10")
         for code in range(0xEFFA, 0xF000):
             name = font.getBestCmap()[code]
             glyph = font["glyf"][name]
@@ -133,9 +135,10 @@ class FontBuildTests(unittest.TestCase):
             self.assertGreater(heights[3], heights[2] * 1.25)
 
     def test_pet_cats_inherit_foreground_and_fit_all_sizes(self):
-        frames, layout, _ = pet_cats.poses()
-        self.assertEqual(len(frames), 172)
-        self.assertEqual(len(layout), 1720)
+        frames, layout, bounds = pet_cats.poses()
+        self.assertEqual(len(frames), 296)
+        self.assertEqual(len(layout), 2960)
+        self.assertEqual(bounds, (10, 40, 18, 34))
         for style in ("Regular", "Bold", "Italic", "BoldItalic"):
             font = TTFont(self.data / f"generated/RunCat-{style}.ttf")
             self.assertNotIn("COLR", font)
@@ -156,13 +159,46 @@ class FontBuildTests(unittest.TestCase):
                 return max(glyph.yMax for glyph in glyphs) - min(glyph.yMin for glyph in glyphs)
             self.assertGreater(run_height(4), run_height(3) * 1.3)
 
+    def test_parkour_launch_is_distinct_from_head_bump_and_reaches_the_edge(self):
+        timeline = [line.split("\t") for line in (FONT_DIR / "pet-cats/parkour.tsv").read_text().splitlines()
+                    if line and not line.startswith("#")]
+        count = len(timeline)
+        self.assertEqual(sum(int(duration) for _, duration in timeline), 2400)
+        with zipfile.ZipFile(FONT_DIR / "vendor/Pet-Cats-Pack.zip") as archive:
+            for frame in range(5):
+                self.assertNotEqual(wall_cat.pixels("wall-parkour", frame, count, archive),
+                                    wall_cat.pixels("wall-bump", frame, 20, archive))
+            for frame in range(count):
+                pixels = wall_cat.pixels("wall-parkour", frame, count, archive)
+                occupied = [(x, y) for y, row in enumerate(pixels)
+                            for x, pixel in enumerate(row) if pixel[3]]
+                self.assertTrue(occupied)
+                self.assertLessEqual(max(x for x, _ in occupied), 39)
+                self.assertGreaterEqual(min(y for _, y in occupied), 16)
+                self.assertLessEqual(max(y for _, y in occupied), 31)
+            contact = wall_cat.pixels("wall-parkour", 5, count, archive)
+            self.assertGreaterEqual(max(x for row in contact for x, pixel in enumerate(row)
+                                        if pixel[3]), 38)
+            centers = []
+            for frame in range(5, 17):
+                pixels = wall_cat.pixels("wall-parkour", frame, count, archive)
+                xs = [x for row in pixels
+                      for x, pixel in enumerate(row) if pixel[3]]
+                centers.append(sum(xs) / len(xs))
+                self.assertTrue(any(pixels[y][39][3] for y in range(27, 32)),
+                                f"parkour frame {frame} lost its planted paw")
+                self.assertGreaterEqual(len(xs), 100, f"parkour frame {frame} lost body volume")
+            self.assertLessEqual(max(abs(right-left) for left, right in
+                                     zip(centers, centers[1:])), 5)
+
     def test_spinning_and_mirrored_glyphs_preserve_width_and_face_the_other_way(self):
         frames, layout, _ = pet_cats.poses()
         font = TTFont(self.data / "generated/RunCat-Regular.ttf")
         self.assertEqual(sum(frame["action"] == "spin" for frame in frames), 32)
-        for frame in range(86):
+        normal_count = len(frames) // 2
+        for frame in range(normal_count):
             bounds = []
-            for index in (frame, 86+frame):
+            for index in (frame, normal_count+frame):
                 glyphs = [(half, font["glyf"][font.getBestCmap()[code]])
                           for code, cells, half, pose in layout if cells == 3 and pose == index]
                 glyphs = [(half, glyph) for half, glyph in glyphs if glyph.numberOfContours]
@@ -307,7 +343,7 @@ class CustomFontBuildTests(unittest.TestCase):
     def test_single_face_derives_family_and_supports_unicode_override(self):
         output = self.root / "single face"
         self.build(output, "--base-font", self.sources / "Regular.ttf")
-        self.assertEqual((output / "font-family.txt").read_text(), "Test Mono RunCat v7\n")
+        self.assertEqual((output / "font-family.txt").read_text(), "Test Mono RunCat v10\n")
         self.build(output, "--base-font", self.sources / "Regular.ttf", "--family", "猫 Mono RunCat")
         font = TTFont(output / "RunCat-Regular.ttf")
         self.assertEqual(font["name"].getDebugName(1), "猫 Mono RunCat")

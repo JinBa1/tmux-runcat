@@ -139,7 +139,7 @@ def rename_font(font, family, style):
     # whose display names contain spaces or non-ASCII characters.
     ascii_family = unicodedata.normalize("NFKD", family).encode("ascii", "ignore").decode()
     postscript = re.sub(r"[^A-Za-z0-9-]", "", ascii_family)[:48] or "RunCat"
-    names = {1: family, 2: face, 3: f"{family}-{style}-runcat-v7",
+    names = {1: family, 2: face, 3: f"{family}-{style}-runcat-v10",
              4: f"{family} {face}", 6: f"{postscript}-{style}",
              16: family, 17: face, 18: f"{family} {face}", 21: family, 22: face}
     for record in list(font["name"].names):
@@ -203,7 +203,7 @@ def main():
         elif args.base_font:
             names = fonts["Regular"]["name"]
             base_family = names.getDebugName(16) or names.getDebugName(1) or args.base_font.stem
-            family = f"{base_family} RunCat v7"
+            family = f"{base_family} RunCat v10"
         else:
             family = Path(__file__).with_name("font-family.txt").read_text().strip()
         if not family or any(ord(char) < 32 or ord(char) == 127 for char in family):

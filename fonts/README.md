@@ -1,7 +1,7 @@
 # RunCat status animation
 
 Run `bash fonts/setup.sh` from the plugin repository root. It builds and installs the clean
-JetBrainsMono Nerd Font family and the separate `JetBrainsMono RunCat v7`
+JetBrainsMono Nerd Font family and the separate `JetBrainsMono RunCat v10`
 family. No manual downloads, pip, or virtual
 environment are needed. Python 3.11+ must be available on PATH.
 
@@ -37,7 +37,7 @@ bash fonts/setup.sh \
 
 Only the regular face is required. Supply optional faces from the same family
 when available; missing faces are left for the terminal to synthesize. The
-patched family defaults to `<original family> RunCat v7`. Use `--family
+patched family defaults to `<original family> RunCat v10`. Use `--family
 'My Mono RunCat'` to name it yourself. `--build-only` works with these options.
 Setup prints the selected family, and WSL setup passes it to Windows Terminal.
 
@@ -80,7 +80,7 @@ build; installers use that manifest to exclude files from earlier selections.
 
 Setup detects WSL and installs fonts in the current Windows user's font
 directory using Windows PowerShell. WSL Windows interoperability must be
-enabled. It selects the generated family (`JetBrainsMono RunCat v7` by default)
+enabled. It selects the generated family (`JetBrainsMono RunCat v10` by default)
 in stable Windows Terminal's defaults, WSL profiles, and profiles using the
 previous default or an existing RunCat family, preserving other
 settings. Settings and font registrations are backed up before changes.
@@ -99,7 +99,7 @@ when available. Select the printed family in your terminal. For Kitty,
 you can instead map only the cat characters while keeping another main font:
 
 ```conf
-symbol_map U+E400-U+E517,U+EFF0-U+EFFF,U+F600-U+F607,U+F620-U+F637,U+F640-U+F65F,U+F700-U+F8A3,U+100000-U+10009F,U+101000-U+10135B JetBrainsMono RunCat v7
+symbol_map U+E400-U+E517,U+EFF0-U+EFFF,U+F600-U+F607,U+F620-U+F637,U+F640-U+F65F,U+F700-U+F8A3,U+100000-U+10009F,U+101000-U+10135B,U+102000-U+10226B,U+103000-U+10326B JetBrainsMono RunCat v10
 ```
 
 ## Animation and font construction
@@ -133,17 +133,28 @@ base-font color palettes and COLR v0/v1 artwork are preserved. The two sleeping
 images gain the same subtle 0/4/8% breathing
 motion, without adding text or changing cell widths.
 
-Version 7 includes an original sixteen-frame slim, upright spinning expression
-inspired by the OIIA cat meme, plus mirrored poses for every Pet Cats action. Existing
-codepoints and geometry stay compatible. Spin glyphs use U+100000–U+10009F;
-mirrored glyphs use U+101000–U+10135B. Each pose has one-, two-, three-, and
-four-cell variants, with the same foreground colour and line metrics. These
-supplementary private-use ranges avoid Nerd Font icon collisions. Font setup
+The three edge reactions are a twenty-frame head bump and recovery,
+a sixteen-frame climbing scratch, and a twenty-six-frame parkour
+rebound. The sixteen-frame OIIA-inspired spin remains available.
+Spin glyphs use U+100000–U+10009F; their mirrored glyphs use
+U+101000–U+10135B. Wall glyphs use U+102000–U+10226B and
+their mirrors use U+103000–U+10326B. Each pose has one-, two-,
+three-, and four-cell variants, with the same foreground colour
+and line metrics. These supplementary private-use ranges avoid Nerd Font
+icon collisions. Font setup
 creates Unicode format 12 character maps when a custom base lacks one.
 
 Enable `@runcat-spin-chance` and `@runcat-roam` as described in the main README.
 The spinner is built from small procedural cat geometry in `spinning_cat.py`;
-the bundled Pet Cats sprites provide the other actions.
+the wall reactions use native Cat-1 pixels with added motion in `wall_cat.py`
+and `parkour_cat.py`.
+The bundled Pet Cats sprites provide the other actions.
+
+Parkour has 26 poses, including an articulated head and torso turn, transfer
+from the forepaws to the rear paws, extension, and landing. Its phase durations
+in `pet-cats/parkour.tsv` total 2.4 seconds. The runtime uses the same release
+and landing boundaries for statusline movement and keeps the planted artwork
+oriented to its wall throughout the turn.
 
 The unmodified [Pet Cats Pack](https://luizmelo.itch.io/pet-cat-pack) archive,
 its CC0 notice, and the pinned pure Python PNG reader are in `vendor/`. No

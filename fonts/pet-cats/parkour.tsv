@@ -1,0 +1,27 @@
+# phase	duration_ms
+gather	80
+lift	80
+reach	80
+reach	80
+plant	80
+settle	80
+compress	110
+compress	110
+look-back	110
+face-front	110
+face-front	110
+pivot	110
+brace	110
+brace	110
+load	110
+push	90
+extend	90
+release	100
+flight	100
+descend	100
+land	100
+absorb	100
+recover	100
+run	50
+run	50
+run	50
