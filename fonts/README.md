@@ -51,6 +51,7 @@ the parent dotfiles setup invokes this script:
 | `--italic-font` | `RUNCAT_ITALIC_FONT` |
 | `--bold-italic-font` | `RUNCAT_BOLD_ITALIC_FONT` |
 | `--family` | `RUNCAT_FONT_FAMILY` |
+| `--fur` | `RUNCAT_FUR` |
 
 Explicit command arguments override environment values. For example:
 
@@ -158,9 +159,125 @@ oriented to its wall throughout the turn.
 
 The unmodified [Pet Cats Pack](https://luizmelo.itch.io/pet-cat-pack) archive,
 its CC0 notice, and the pinned pure Python PNG reader are in `vendor/`. No
-download is needed during setup. This skin uses Cat-1; the complete official
+download is needed during setup. The default monochrome skin uses Cat-1; the complete official
 archive is retained for provenance. Use `#[fg=cyan]#{@runcat-frame}` in your
 status format for a cyan cat, or choose any other tmux foreground color.
+
+## Color coats
+
+Color coats are optional. `--fur mono` is the default and creates the normal
+foreground-colored cat. Motion settings are independent of the selected coat.
+
+Build and install a colored coat with:
+
+```sh
+bash fonts/setup.sh --fur tuxedo
+```
+
+| `--fur` | Coat | Default font family |
+| --- | --- | --- |
+| `tabby` | Warm brown fur and dark stripes | JetBrainsMono RunCat Tabby v1 |
+| `orange-tabby` | Ginger fur, rust stripes, pale muzzle | JetBrainsMono RunCat Orange Tabby v1 |
+| `silver-tabby` | Cool grey fur and charcoal stripes | JetBrainsMono RunCat Silver Tabby v1 |
+| `black` | Black fur with charcoal highlights | JetBrainsMono RunCat Black v1 |
+| `tuxedo` | Black coat, white bib, muzzle and socks | JetBrainsMono RunCat Tuxedo v1 |
+| `calico` | White coat with orange and black patches | JetBrainsMono RunCat Calico v1 |
+
+Setup installs a separate family for the selected coat and, on WSL,
+selects it in Windows Terminal. On Linux select that family in your terminal.
+Keep `@runcat-skin pet-cats`; no worker rebuild or restart is needed. The
+classic skin keeps its normal foreground outlines. `--build-only` and custom
+base-font arguments work as usual; `RUNCAT_FUR=tuxedo` is the environment equivalent.
+Use `bash fonts/setup.sh --fur mono` to return to the normal font.
+If automatic coat selection is enabled, first set `@runcat-coat font` so the
+next attachment does not select a colored family again.
+Once families are installed, selecting their names in your terminal changes
+coats immediately. On Windows, `install-windows.ps1 -KeepTerminalFont` installs
+a built family without selecting it, for adding several coats together.
+
+To install all six using the standard setup command, run this from the repo:
+
+```sh
+for coat in tabby orange-tabby silver-tabby black tuxedo calico; do
+  bash fonts/setup.sh --fur "$coat"
+done
+```
+
+Random selection uses only installed coats, so installing a subset is also
+supported. Font setup selects each family as it installs it on WSL; use the
+tmux settings below to control subsequent selection.
+
+### Manual, fixed, or random selection
+
+Keep `@runcat-skin pet-cats` in your tmux config. The coat selector is optional
+and currently supports standard JetBrainsMono coat families in Windows
+Terminal on WSL:
+
+```tmux
+set -g @runcat-coat font    # no automatic font changes (default)
+```
+
+Use `set -g @runcat-coat tuxedo` for a fixed installed coat, or
+`set -g @runcat-coat random` for a fresh choice on startup, reload, or
+attach/reattach. Put the setting before the plugin's load line. It takes
+effect at the next selection event; changing it to `font` prevents future
+automatic changes without removing the selected coat.
+
+The random selector avoids an immediate repeat when more than one coat is
+installed. It runs in the background on attachment without restarting the
+animation worker. The choice is shared across the configured Windows Terminal
+profiles, rather than being a separate font per tmux session. Concurrent
+attachment events serialize the font update. `@runcat-coat-picked` reports
+the last selection, and selection errors leave the worker running.
+
+### Return to a solid foreground color
+
+Stop automatic font changes and select the monochrome family:
+
+```sh
+tmux set -g @runcat-coat font
+bash fonts/setup.sh --fur mono
+```
+
+If `JetBrainsMono RunCat v10` is already installed, select it directly instead
+of rebuilding. Save `set -g @runcat-coat font` in your tmux config as well.
+Set `@runcat-color cyan` (or another supported tmux foreground) for a roaming
+cat; use `inherit` to follow the status foreground. A stationary cat can use
+`#[fg=cyan]#{@runcat-frame}#[default]` in its status format.
+
+### Rendering and previews
+
+The coats use COLR v0 / CPAL solid-color layers. Color-capable terminals show
+the fixed fur palette; other renderers retain the original monochrome
+silhouette. `@runcat-color` affects that fallback, not the colored fur. Cell
+widths, line height, original text, icons, and base-font color artwork are
+preserved. Each pose is clipped into the same one to four cells as before.
+
+The CC0 pack's Cat-6 supplies the authored stripes for the three tabbies.
+Tail centerlines in `pet-cats/tabby-tails.tsv` add rings before wall transforms.
+The scratch and bump carry the colored pixels through the existing motion;
+custom parkour limbs and head use the same materials. Spin samples markings
+in the rotating model's coordinates so the texture turns with the cat.
+Black, tuxedo, and calico use Cat-1's gait and shading. Anatomical landmarks in
+`pet-cats/coat-regions.tsv` anchor the white bib, socks, and patches before
+posing. Calico uses orange on the rear flank, black toward the shoulder, a
+split cap, and white underparts. White outer pixels receive subtle shading
+to remain visible on light backgrounds. The three tabbies share the same markings.
+
+To export every frame and a local viewer with playback, mirroring, stepping,
+slow motion, light/dark backgrounds, and actual font samples:
+
+```sh
+PYTHONPATH=fonts/vendor/fonttools-4.67.0-py3-none-any.whl:fonts/vendor/pypng-0.20220715.0-py3-none-any.whl \
+  python3 fonts/preview-cats.py /tmp/runcat-coat-review --fur tuxedo \
+  --font "$HOME/.local/share/tmux-runcat/generated/RunCat-Regular.ttf"
+```
+
+Open `/tmp/runcat-coat-review/index.html` after building the matching coat font. The
+viewer includes all 148 poses, both directions, and the production wall-action
+timings. Locomotion previews use a representative speed; typing controls the
+real speed in tmux. `preview-tabby.py` remains a compatibility entry point.
+Coats are selected through the terminal font; `@runcat-skin` remains `pet-cats`.
 
 Medium poses occupy two adjacent characters: U+EFF0–U+EFF4 for the left halves
 and U+EFF5–U+EFF9 for the right halves. U+EFFA–U+EFFF contain three breathing
