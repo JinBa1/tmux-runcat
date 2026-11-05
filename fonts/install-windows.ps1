@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$FontDirectory)
+param([Parameter(Mandatory = $true)][string]$FontDirectory, [switch]$KeepTerminalFont)
 $ErrorActionPreference = 'Stop'
 
 # Install only this build's manifest, so changing base fonts never installs
@@ -55,6 +55,12 @@ $result = [UIntPtr]::Zero
 [RunCatFonts]::SendMessageTimeout([IntPtr]0xffff, 0x001D,
     [UIntPtr]::Zero, [IntPtr]::Zero, 2, 1000, [ref]$result) | Out-Null
 
-& (Join-Path $PSScriptRoot 'configure-windows-terminal.ps1') -FontFamily $fontFamily
+if (-not $KeepTerminalFont) {
+    & (Join-Path $PSScriptRoot 'configure-windows-terminal.ps1') -FontFamily $fontFamily
+}
 Write-Output "Installed $($fonts.Count) fonts. Font registry backup: $registryBackup"
-Write-Output "Selected ${fontFamily}: your base font with classic and Pet Cats skins."
+if ($KeepTerminalFont) {
+    Write-Output "Available: ${fontFamily}."
+} else {
+    Write-Output "Selected ${fontFamily}: your base font with classic and Pet Cats skins."
+}

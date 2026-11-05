@@ -10,22 +10,24 @@ FONT_BOLD="${RUNCAT_BOLD_FONT:-}"
 FONT_ITALIC="${RUNCAT_ITALIC_FONT:-}"
 FONT_BOLD_ITALIC="${RUNCAT_BOLD_ITALIC_FONT:-}"
 FONT_FAMILY="${RUNCAT_FONT_FAMILY:-}"
+FONT_FUR="${RUNCAT_FUR:-mono}"
 usage() {
     cat <<'USAGE'
 Usage: fonts/setup.sh [--build-only] [--base-font FILE] [--family NAME]
                       [--bold-font FILE] [--italic-font FILE] [--bold-italic-font FILE]
+                      [--fur mono|tabby|orange-tabby|silver-tabby|black|tuxedo|calico]
 
 Use static monospaced TrueType files. Optional faces require --base-font.
 Without --base-font, use the bundled JetBrainsMono Nerd Font family.
 Environment: RUNCAT_BASE_FONT, RUNCAT_BOLD_FONT, RUNCAT_ITALIC_FONT,
-             RUNCAT_BOLD_ITALIC_FONT, RUNCAT_FONT_FAMILY.
+             RUNCAT_BOLD_ITALIC_FONT, RUNCAT_FONT_FAMILY, RUNCAT_FUR.
 USAGE
 }
 while (($#)); do
     case "$1" in
         --build-only) FONT_BUILD_ONLY=true; shift ;;
         --help|-h) usage; exit 0 ;;
-        --base-font|--bold-font|--italic-font|--bold-italic-font|--family)
+        --base-font|--bold-font|--italic-font|--bold-italic-font|--family|--fur)
             if (($# < 2)) || [[ -z "$2" || "$2" == --* ]]; then
                 printf 'Missing value for %s\n' "$1" >&2
                 exit 2
@@ -36,6 +38,7 @@ while (($#)); do
                 --italic-font) FONT_ITALIC="$2" ;;
                 --bold-italic-font) FONT_BOLD_ITALIC="$2" ;;
                 --family) FONT_FAMILY="$2" ;;
+                --fur) FONT_FUR="$2" ;;
             esac
             shift 2 ;;
         *) usage >&2; exit 2 ;;
@@ -45,7 +48,7 @@ if [[ -z "$FONT_BASE" && -n "$FONT_BOLD$FONT_ITALIC$FONT_BOLD_ITALIC" ]]; then
     printf 'Optional font faces require --base-font or RUNCAT_BASE_FONT.\n' >&2
     exit 2
 fi
-FONT_BUILD_ARGS=()
+FONT_BUILD_ARGS=(--fur "$FONT_FUR")
 [[ -z "$FONT_BASE" ]] || FONT_BUILD_ARGS+=(--base-font "$FONT_BASE")
 [[ -z "$FONT_BOLD" ]] || FONT_BUILD_ARGS+=(--bold-font "$FONT_BOLD")
 [[ -z "$FONT_ITALIC" ]] || FONT_BUILD_ARGS+=(--italic-font "$FONT_ITALIC")

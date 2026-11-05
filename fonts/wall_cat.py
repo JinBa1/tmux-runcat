@@ -5,35 +5,39 @@ import zipfile
 
 import png
 import parkour_cat
+import cat_coats
 
 
 INK = (255, 160, 60, 255)
 CLEAR = (0, 0, 0, 0)
 
 
-def source(archive: zipfile.ZipFile, action: str, frame: int):
-    path = f"Pet Cats Pack/Cat-1/Cat-1-{action}.png"
+def source(archive: zipfile.ZipFile, action: str, frame: int, fur=None):
+    coat = cat_coats.get(fur)
+    cat = coat.source_cat if coat else 1
+    path = f"Pet Cats Pack/Cat-{cat}/Cat-{cat}-{action}.png"
     width, height, rows, _ = png.Reader(file=io.BytesIO(archive.read(path))).asRGBA8()
     rows = list(rows)
     if height != 50 or width < (frame + 1) * 50:
-        raise ValueError(f"Unexpected Cat-1 sprite sheet: {path}")
-    return [[tuple(row[4 * (frame * 50 + x):4 * (frame * 50 + x + 1)])
-             for x in range(50)] for row in rows]
+        raise ValueError(f"Unexpected Cat-{cat} sprite sheet: {path}")
+    pixels = [[tuple(row[4 * (frame * 50 + x):4 * (frame * 50 + x + 1)])
+               for x in range(50)] for row in rows]
+    return coat.recolor(pixels, action, frame) if coat else pixels
 
 
-def line(canvas, start, end, width=1):
+def line(canvas, start, end, width=1, material=None):
     steps = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
     for step in range(steps + 1):
         x = round(start[0] + (end[0] - start[0]) * step / max(steps, 1))
         y = round(start[1] + (end[1] - start[1]) * step / max(steps, 1))
         for dx in range(width):
             if 0 <= x + dx < 50 and 0 <= y < 50:
-                canvas[y][x + dx] = INK
+                canvas[y][x + dx] = material(step / max(steps, 1)) if material else INK
 
 
-def pixels(mode: str, frame: int, count: int, archive: zipfile.ZipFile):
+def pixels(mode: str, frame: int, count: int, archive: zipfile.ZipFile, fur=None):
     if mode == "wall-parkour":
-        return parkour_cat.pixels(frame, lambda action, index: source(archive, action, index))
+        return parkour_cat.pixels(frame, lambda action, index: source(archive, action, index, fur), fur)
     if mode == "wall-bump":
         if frame < 3:
             base, index, shift = "Run", frame % 3, (0, 2, 4)[frame]
@@ -62,7 +66,7 @@ def pixels(mode: str, frame: int, count: int, archive: zipfile.ZipFile):
     else:
         raise ValueError(f"Unknown wall animation: {mode}")
     canvas = [[CLEAR for _ in range(50)] for _ in range(50)]
-    for y, row in enumerate(source(archive, base, index)):
+    for y, row in enumerate(source(archive, base, index, fur)):
         for x, pixel in enumerate(row):
             if not pixel[3]:
                 continue
@@ -81,16 +85,17 @@ def pixels(mode: str, frame: int, count: int, archive: zipfile.ZipFile):
                 canvas[target_y][target_x] = pixel
     if mode == "wall-bump" and 3 <= frame < 5:
         # A compressed nose and two tiny impact ticks, then a backward step.
-        line(canvas, (38, 18), (39, 16))
-        line(canvas, (38, 22), (39, 23))
+        material = cat_coats.material(fur, "effect")
+        line(canvas, (38, 18), (39, 16), material=material)
+        line(canvas, (38, 22), (39, 23), material=material)
     if mode == "wall-scratch" and 3 <= frame < 13:
         # The hind paws stay planted as the torso lengthens upward. Forepaws
         # climb in alternating strokes, with small claw tips at the edge.
         stroke = (frame - 3) % 4
         near_y = (21, 18, 16, 19)[stroke]
         far_y = (17, 20, 19, 16)[stroke]
-        line(canvas, (32, 25 - climb // 2), (38, near_y), 2)
-        line(canvas, (30, 26 - climb // 2), (37, far_y))
-        line(canvas, (38, near_y), (39, near_y + 1))
-        line(canvas, (37, far_y), (38, far_y + 1))
+        line(canvas, (32, 25 - climb // 2), (38, near_y), 2, cat_coats.material(fur, "leg"))
+        line(canvas, (30, 26 - climb // 2), (37, far_y), material=cat_coats.material(fur, "far-leg"))
+        line(canvas, (38, near_y), (39, near_y + 1), material=cat_coats.material(fur, "effect"))
+        line(canvas, (37, far_y), (38, far_y + 1), material=cat_coats.material(fur, "effect"))
     return canvas

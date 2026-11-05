@@ -18,6 +18,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         [command, plugin, socket, pid] if command == "load" => {
             load::run(Path::new(plugin), Some((socket, pid)))?;
         }
+        [command, plugin] if command == "coat" => load::coat(Path::new(plugin), None)?,
+        [command, plugin, socket] if command == "coat" => {
+            load::coat(Path::new(plugin), Some(socket))?;
+        }
         [command, socket, pid, generation] if command == "watch" => {
             watch::run(
                 socket,
@@ -29,7 +33,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("tmux-runcat {}", env!("CARGO_PKG_VERSION"));
         }
         _ => return Err(
-            "usage: tmux-runcat load <plugin-dir> [socket pid] | watch <socket> <pid> <generation>"
+            "usage: tmux-runcat load <plugin-dir> [socket pid] | coat <plugin-dir> [socket] | watch <socket> <pid> <generation>"
                 .into(),
         ),
     }

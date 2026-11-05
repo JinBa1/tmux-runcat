@@ -9,12 +9,15 @@ import shutil
 import unicodedata
 
 from fontTools.pens.basePen import BasePen
+from fontTools.colorLib.builder import buildCOLR, buildCPAL, populateCOLRv0
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.svgLib.path import SVGPath
 from fontTools.ttLib import TTFont, TTLibError
 from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
+from fontTools.ttLib.tables.C_P_A_L_ import Color
 
 import pet_cats
+import cat_coats
 
 
 class OutlinePen(BasePen):
@@ -169,6 +172,38 @@ def outline_glyph(contours, bounds, scale, left, baseline, advance, half):
     return pen.glyph()
 
 
+def add_coat_colors(font, layers, colors):
+    """Append our palette and v0 layers without replacing base-font artwork."""
+    offset = 0
+    if "CPAL" in font:
+        palette = font["CPAL"]
+        offset = palette.numPaletteEntries
+        for entries in palette.palettes:
+            entries.extend(Color.fromRGBA(*color) for color in colors)
+        palette.numPaletteEntries += len(colors)
+        if palette.version == 1 and palette.paletteEntryLabels:
+            palette.paletteEntryLabels.extend([0xFFFF] * len(colors))
+    else:
+        font["CPAL"] = buildCPAL([[tuple(component/255 for component in color)
+                                  for color in colors]])
+    layers = {name: [(glyph, index + offset) for glyph, index in entries]
+              for name, entries in layers.items()}
+    if "COLR" not in font:
+        font["COLR"] = buildCOLR(layers, version=0, glyphMap=font.getReverseGlyphMap())
+    elif font["COLR"].version == 0:
+        font["COLR"].ColorLayers.update(buildCOLR(layers, version=0).ColorLayers)
+    else:
+        table = font["COLR"].table
+        existing = {}
+        if table.BaseGlyphRecordArray:
+            records = table.LayerRecordArray.LayerRecord
+            for base in table.BaseGlyphRecordArray.BaseGlyphRecord:
+                existing[base.BaseGlyph] = [(layer.LayerGlyph, layer.PaletteIndex)
+                                            for layer in records[base.FirstLayerIndex:
+                                                                 base.FirstLayerIndex + base.NumLayers]]
+        populateCOLRv0(table, {**existing, **layers}, font.getReverseGlyphMap())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="extracted default JetBrainsMono Nerd Font release")
@@ -179,6 +214,8 @@ def main():
     parser.add_argument("--italic-font", type=Path)
     parser.add_argument("--bold-italic-font", type=Path)
     parser.add_argument("--family", help="display name of the patched family")
+    parser.add_argument("--fur", choices=("mono", *cat_coats.CHOICES), default="mono",
+                        help="colored coat, or normal foreground outlines")
     args = parser.parse_args()
     if not args.base_font and any((args.bold_font, args.italic_font, args.bold_italic_font)):
         parser.error("optional font faces require --base-font")
@@ -191,7 +228,8 @@ def main():
         if path:
             sources[style] = path
     poses, layout, classic_bounds = cat_poses()
-    pet_frames, pet_layout, pet_bounds = pet_cats.poses()
+    coat = cat_coats.get(args.fur)
+    pet_frames, pet_layout, pet_bounds = pet_cats.poses(args.fur if coat else None)
     pet_codes = {code for code, _, _, _ in pet_layout}
     layout += pet_layout
     fonts = {}
@@ -203,7 +241,9 @@ def main():
         elif args.base_font:
             names = fonts["Regular"]["name"]
             base_family = names.getDebugName(16) or names.getDebugName(1) or args.base_font.stem
-            family = f"{base_family} RunCat v10"
+            family = f"{base_family} RunCat {coat.suffix} v1" if coat else f"{base_family} RunCat v10"
+        elif coat:
+            family = f"JetBrainsMono RunCat {coat.suffix} v1"
         else:
             family = Path(__file__).with_name("font-family.txt").read_text().strip()
         if not family or any(ord(char) < 32 or ord(char) == 127 for char in family):
@@ -243,6 +283,7 @@ def main():
             cap_height = getattr(font["glyf"][original_cmap[ord("H")]], "yMax", units * 0.7)
         cap_height = min(cap_height or units * 0.7, row_height)
         order = list(font.getGlyphOrder())
+        color_layers = {}
 
         def store_glyph(name, glyph):
             font["glyf"][name] = glyph
@@ -267,10 +308,22 @@ def main():
             geometry = (bounds, scale, left, floor, advance, half)
             contours = pet_frames[frame]["mono"] if is_pet else poses[frame]
             store_glyph(name, outline_glyph(contours, *geometry))
+            if is_pet and coat:
+                layers = []
+                for index, contours in pet_frames[frame]["layers"]:
+                    glyph = outline_glyph(contours, *geometry)
+                    if glyph.numberOfContours:
+                        layer_name = f"{name}.fur{index}"
+                        store_glyph(layer_name, glyph)
+                        layers.append((layer_name, index))
+                if layers:
+                    color_layers[name] = layers
             for table in font["cmap"].tables:
                 if table.isUnicode() and table.format != 14 and (code <= 0xFFFF or table.format in (12, 13)):
                     table.cmap[code] = name
         font.setGlyphOrder(order)
+        if color_layers:
+            add_coat_colors(font, color_layers, coat.palette)
         rename_font(font, family, style)
         destination = args.output / f"RunCat-{style}.ttf"
         font.save(destination)

@@ -1,11 +1,13 @@
 """Convert the bundled CC0 Pet Cats pixels to foreground-colored outlines."""
 
 from pathlib import Path
+from functools import lru_cache
 import zipfile
 
 import png
 import spinning_cat
 import wall_cat
+import cat_coats
 
 BASE = 0xF700
 XLARGE_BASE = 0xE400
@@ -37,23 +39,27 @@ def rectangles(pixels, accept):
     return contours
 
 
-def poses():
+@lru_cache(maxsize=7)
+def pixel_frames(fur=None):
+    """Unscaled, unmirrored artwork; breathing is applied to every color layer."""
     frames = []
+    coat = cat_coats.get(fur)
+    def finish(pixels):
+        return coat.finish(pixels) if coat else pixels
     with zipfile.ZipFile(Path(__file__).with_name("vendor") / "Pet-Cats-Pack.zip") as archive:
         for name, filename, count, mode in animations():
             count = int(count)
             if mode == "spin":
                 for frame in range(count):
-                    mono = rectangles(spinning_cat.pixels(frame, count), lambda pixel: pixel[3])
-                    frames.append({"mono": mono, "action": name})
+                    frames.append({"pixels": finish(spinning_cat.pixels(frame, count, fur)), "action": name, "breath": 0})
                 continue
             if mode.startswith("wall-"):
                 for frame in range(count):
-                    mono = rectangles(wall_cat.pixels(mode, frame, count, archive),
-                                      lambda pixel: pixel[3] and pixel[1] < pixel[0]*0.95)
-                    frames.append({"mono": mono, "action": name})
+                    frames.append({"pixels": finish(wall_cat.pixels(mode, frame, count, archive, fur)),
+                                   "action": name, "breath": 0})
                 continue
-            path = f"Pet Cats Pack/Cat-1/Cat-1-{filename}.png"
+            cat = coat.source_cat if coat else 1
+            path = f"Pet Cats Pack/Cat-{cat}/Cat-{cat}-{filename}.png"
             width, height, rows, _ = png.Reader(bytes=archive.read(path)).asRGBA8()
             rows = [[tuple(row[x:x+4]) for x in range(0, len(row), 4)] for row in rows]
             source_count = 1 if mode == "breathing" else count
@@ -62,16 +68,30 @@ def poses():
             for frame in range(count):
                 source = 0 if mode == "breathing" else frame
                 pixels = [row[source*50:(source+1)*50] for row in rows]
-                # The first cat has green eyes against orange fur. Keep these
-                # as cutouts so the cat can inherit the status foreground.
-                mono = rectangles(pixels, lambda pixel: pixel[3] and pixel[1] < pixel[0]*0.95)
-                if mode == "breathing":
-                    floor = min(y for contour in mono for _, y in contour)
-                    def breathe(contours):
-                        return [[(x, floor + (y-floor)*(1+0.04*frame)) for x, y in contour]
-                                for contour in contours]
-                    mono = breathe(mono)
-                frames.append({"mono": mono, "action": name})
+                if coat:
+                    pixels = coat.recolor(pixels, filename, source)
+                frames.append({"pixels": finish(pixels), "action": name,
+                               "breath": frame if mode == "breathing" else 0})
+    return frames
+
+
+def poses(fur=None):
+    frames = []
+    coat = cat_coats.get(fur)
+    for artwork, original in zip(pixel_frames(fur), pixel_frames()):
+        # Keep the established monochrome outlines as the fallback, including
+        # their eye cutouts. A color-capable renderer uses the authored layers.
+        mono = rectangles(original["pixels"], lambda pixel: pixel[3] and
+                          (original["action"] == "spin" or pixel[1] < pixel[0]*0.95))
+        floor = min(y for contour in mono for _, y in contour)
+        def breathe(contours):
+            return [[(x, floor + (y-floor)*(1+0.04*artwork["breath"])) for x, y in contour]
+                    for contour in contours]
+        entry = {"mono": breathe(mono), "action": artwork["action"]}
+        if coat:
+            entry["layers"] = [(index, breathe(rectangles(artwork["pixels"], lambda pixel: pixel == color)))
+                               for index, color in enumerate(coat.palette)]
+        frames.append(entry)
     # One common coordinate system for every action prevents accidental
     # resizing or baseline shifts between walking, sitting, and sleeping.
     points = [point for frame in frames for contour in frame["mono"] for point in contour]
@@ -92,9 +112,11 @@ def poses():
                for index in range(wall_start, len(frames))
                for cells, offset in sizes for half in range(cells)]
     normal_count = len(frames)
-    frames += [{"mono": [[(50-x, y) for x, y in reversed(contour)]
-                          for contour in frame["mono"]], "action": frame["action"]}
-               for frame in frames[:]]
+    def mirror(contours):
+        return [[(50-x, y) for x, y in reversed(contour)] for contour in contours]
+    frames += [{"mono": mirror(frame["mono"]), "action": frame["action"],
+                **({"layers": [(index, mirror(contours)) for index, contours in frame["layers"]]}
+                   if "layers" in frame else {})} for frame in frames[:]]
     layout += [(MIRROR_BASE + index*10 + offset + half, cells, half, normal_count+index)
                for index in range(wall_start)
                for cells, offset in sizes for half in range(cells)]

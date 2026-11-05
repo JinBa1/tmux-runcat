@@ -3,22 +3,10 @@ param(
     [string]$FontFamily = (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $PSScriptRoot 'font-family.txt')).Trim()
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-terminal-settings.ps1')
 if ([string]::IsNullOrWhiteSpace($FontFamily)) { throw 'FontFamily must not be empty.' }
 if (Test-Path -LiteralPath $settingsPath) {
-    $settings = [IO.File]::ReadAllText($settingsPath)
-    # Windows Terminal accepts JSON with comments and trailing commas. Keep
-    # quoted strings intact while removing those extensions for PowerShell 5.
-    $json = [regex]::Replace($settings, '("(?:\\.|[^"\\])*")|(/\*[\s\S]*?\*/|//[^\r\n]*)', {
-        param($match)
-        if ($match.Groups[1].Success) { return $match.Value }
-        return ' '
-    })
-    $json = [regex]::Replace($json, '("(?:\\.|[^"\\])*")|,(\s*[}\]])', {
-        param($match)
-        if ($match.Groups[1].Success) { return $match.Value }
-        return $match.Groups[2].Value
-    })
-    $config = $json | ConvertFrom-Json
+    $config = Read-RunCatTerminalSettings $settingsPath
     if (-not $config.profiles.PSObject.Properties['defaults']) {
         $config.profiles | Add-Member -NotePropertyName defaults -NotePropertyValue ([pscustomobject]@{})
     }
@@ -42,7 +30,7 @@ if (Test-Path -LiteralPath $settingsPath) {
         }
     }
     if ($changed) {
-        $backup = $settingsPath + '.runcat-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.bak'
+        $backup = $settingsPath + '.runcat-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.bak'
         Copy-Item -LiteralPath $settingsPath -Destination $backup
         $updated = $config | ConvertTo-Json -Depth 100
         [IO.File]::WriteAllText($settingsPath, $updated, (New-Object Text.UTF8Encoding $false))

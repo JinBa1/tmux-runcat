@@ -7,6 +7,37 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn shell_command(arguments: &[&OsStr]) -> OsString {
+    let mut command = OsString::new();
+    for argument in arguments {
+        if !command.is_empty() {
+            command.push(" ");
+        }
+        command.push(shell_quote(argument));
+    }
+    command
+}
+
+fn select_coat(tmux: &Tmux, plugin: &Path) -> io::Result<()> {
+    let output = tmux.output(["show-options", "-gqv", "@runcat-coat"])?;
+    let coat = String::from_utf8_lossy(&output.stdout);
+    let coat = coat.trim();
+    if coat.is_empty() || coat == "font" {
+        return Ok(());
+    }
+    let selection = Command::new("bash")
+        .arg(plugin.join("fonts/select-coat.sh"))
+        .arg(coat)
+        .output()?;
+    if !selection.status.success() {
+        return Err(io::Error::other(
+            String::from_utf8_lossy(&selection.stderr).trim().to_owned(),
+        ));
+    }
+    let selected = String::from_utf8_lossy(&selection.stdout);
+    tmux.execute(["set-option", "-g", "@runcat-coat-picked", selected.trim()])
+}
+
 fn context(explicit: Option<(&OsStr, &OsStr)>) -> io::Result<(OsString, OsString)> {
     if let Some((socket, pid)) = explicit {
         return Ok((socket.to_owned(), pid.to_owned()));
@@ -26,6 +57,14 @@ fn context(explicit: Option<(&OsStr, &OsStr)>) -> io::Result<(OsString, OsString
         .split_once('\t')
         .ok_or_else(|| io::Error::other("could not find tmux server"))?;
     Ok((socket.into(), pid.into()))
+}
+
+pub fn coat(plugin: &Path, socket: Option<&OsStr>) -> io::Result<()> {
+    let socket = match socket {
+        Some(socket) => socket.to_owned(),
+        None => context(None)?.0,
+    };
+    select_coat(&Tmux::new(&socket), plugin)
 }
 
 pub fn run(plugin: &Path, explicit: Option<(&OsStr, &OsStr)>) -> io::Result<()> {
@@ -57,19 +96,40 @@ pub fn run(plugin: &Path, explicit: Option<(&OsStr, &OsStr)>) -> io::Result<()> 
         ("@runcat-wall-debug", "off"),
         ("@runcat-roam", "off"),
         ("@runcat-color", "inherit"),
+        ("@runcat-coat", "font"),
     ] {
         if !tmux.output(["show-options", "-gv", name])?.status.success() {
             tmux.execute(["set-option", "-g", name, value])?;
         }
     }
+    // Only load and attachment events switch fonts; the worker keeps animating.
+    if let Err(error) = select_coat(&tmux, plugin) {
+        eprintln!("tmux-runcat: coat selection failed; keeping the current font: {error}");
+    }
     tmux.source("bind-key -T root Any if-shell -F '#{!=:#{mouse_x},}' {\n    send-keys -M\n} {\n    set-option -F @runcat-keys '#{e|+:#{@runcat-keys},1}'\n    send-keys\n}\n")?;
+    let executable = env::current_exe()?;
+    let selection = shell_command(&[
+        executable.as_os_str(),
+        OsStr::new("coat"),
+        plugin.as_os_str(),
+        &socket,
+    ]);
+    let mut hook = OsString::from("run-shell -b ");
+    hook.push(shell_quote(&selection));
+    // An owned array slot survives reloads without duplicating our hook or
+    // replacing other plugins' client-attached handlers.
+    tmux.execute([
+        OsStr::new("set-hook"),
+        OsStr::new("-g"),
+        OsStr::new("client-attached[38272]"),
+        &hook,
+    ])?;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_nanos();
     let generation = format!("{}-{nanos}", std::process::id());
     tmux.execute(["set-option", "-g", "@runcat-generation", &generation])?;
-    let executable = env::current_exe()?;
     let arguments = [
         executable.as_os_str(),
         OsStr::new("watch"),
@@ -77,12 +137,6 @@ pub fn run(plugin: &Path, explicit: Option<(&OsStr, &OsStr)>) -> io::Result<()> 
         &pid,
         OsStr::new(&generation),
     ];
-    let mut worker = OsString::new();
-    for argument in arguments {
-        if !worker.is_empty() {
-            worker.push(" ");
-        }
-        worker.push(shell_quote(argument));
-    }
+    let worker = shell_command(&arguments);
     tmux.execute([OsStr::new("run-shell"), OsStr::new("-b"), &worker])
 }
